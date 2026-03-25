@@ -3,7 +3,7 @@
 
 # Autonomic -- Product Requirements Document
 
-**Version**: v0.5
+**Version**: v0.5  
 **Date**: 2026-03-26  
 **Status**: Planning  
 **Author**: [Sephyi](https://github.com/Sephyi) + [Claude Opus 4.6](https://www.anthropic.com/news/claude-opus-4-6) + [Gemini 3 Pro](https://deepmind.google/technologies/gemini/) + [Codex gpt-5.4](https://openai.com/index/codex/)  
