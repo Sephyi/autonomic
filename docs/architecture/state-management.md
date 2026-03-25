@@ -67,6 +67,30 @@ projects/*/history.sqlite
 *.sqlite-wal
 *.sqlite-shm
 *.tmp
+secrets.toml          # NEVER committed — API keys, tokens
+daemon-heartbeat      # Transient runtime state
+state/sessions/*.pid  # Transient PID files
+```
+
+### Secret Management (Gemini Review Finding)
+
+`config.toml` is git-tracked. API keys and tokens MUST NOT be placed in `config.toml`. Instead:
+
+- **`secrets.toml`** (gitignored): Stores API keys for Codex, Gemini, and any other external services.
+- **Environment variable substitution**: `config.toml` references secrets via `${env:CODEX_API_KEY}` syntax. Figment resolves these at load time.
+- **macOS Keychain** (future): For maximum security, secrets can be stored in Keychain and retrieved at runtime via `security find-generic-password`.
+
+```toml
+# ~/.autonomic/secrets.toml (NEVER committed)
+[external.codex]
+api_key = "sk-..."
+
+[external.gemini]
+api_key = "AI..."
+
+# Or in config.toml with env reference (committed safely):
+# [external.codex]
+# api_key = "${env:CODEX_API_KEY}"
 ```
 
 The SQLite databases `state.sqlite` and `memory.sqlite` are committed, but only at snapshot boundaries (not on every write). Their WAL files are never committed.

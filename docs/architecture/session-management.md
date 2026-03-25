@@ -717,6 +717,12 @@ fn continue_session(
 }
 ```
 
+**CRITICAL: Orphan Process Prevention** (Gemini review finding): If the daemon crashes or is killed (SIGKILL), child Claude Code processes are detached and continue running — burning rate budget silently. Mitigations:
+1. Each session writes its child PID to `~/.autonomic/state/sessions/<session_id>.pid`.
+2. The watchdog sweeps for orphaned `claude` processes on every startup (match PID files against running processes).
+3. The daemon writes a heartbeat to `~/.autonomic/state/daemon-heartbeat` every 30s. Sessions can self-terminate if heartbeat is stale (>90s).
+4. On graceful shutdown (SIGTERM), the daemon sends SIGTERM to all children and waits up to 30s before SIGKILL.
+
 **CRITICAL: System prompt does NOT persist across --resume** (discovered from ClaudeClaw source code analysis). The `--append-system-prompt` flag does not persist across session resumes. The orchestrator MUST re-inject the full system context (identity, project context, memory assembly) on every `--resume` call. This is not optional — without re-injection, resumed sessions lose all orchestrator context.
 
 ### `--resume <session_id>` (Resume Specific Session)

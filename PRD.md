@@ -3,13 +3,13 @@
 
 # Autonomic -- Product Requirements Document
 
-**Version**: v0.3
-**Date**: 2026-03-25
-**Status**: Planning
-**Author**: [Sephyi](https://github.com/Sephyi) + [Claude Opus 4.6](https://www.anthropic.com/news/claude-opus-4-6)
-**Edition**: Rust 2024 | **MSRV**: 1.94 | **Toolchain**: stable
-**License**: LicenseRef-Proprietary | **REUSE compliant**
-**Platform**: macOS 14+ (primary), Linux (secondary)
+**Version**: v0.3  
+**Date**: 2026-03-25  
+**Status**: Planning  
+**Author**: [Sephyi](https://github.com/Sephyi) + [Claude Opus 4.6](https://www.anthropic.com/news/claude-opus-4-6) + [Gemini 3 Pro](https://deepmind.google/technologies/gemini/)  
+**Edition**: Rust 2024 | **MSRV**: 1.94 | **Toolchain**: stable  
+**License**: LicenseRef-Proprietary | **REUSE compliant**  
+**Platform**: macOS 14+ (primary), Linux (secondary)  
 
 <details>
 <summary>Changelog</summary>
@@ -199,7 +199,7 @@ SQLite + FTS5 replaces Mem0/Qdrant/Ollama. Zero external dependencies. <1ms quer
 
 **Entry types**: Decision (decay 0.01), Pattern (0.03), Gotcha (0.02), Preference (0.01), Tool (0.05), Error (0.08), Lesson (0.10), Ephemeral (0.20).
 
-**Context assembly**: FTS5 keyword search -> scope filter -> score (`FTS_rank * usefulness * exp(-decay * days) * category_boost`) -> token-budgeted packing with primacy/recency ordering -> inject via SessionStart hook.
+**Context assembly**: FTS5 keyword search -> scope filter -> score (`FTS_rank * usefulness_laplace * exp(-decay * days) * category_boost`, where `usefulness_laplace = (helpful+1)/(helpful+misleading+2)`) -> token-budgeted packing with primacy/recency ordering -> inject via SessionStart hook.
 
 **MEMORY.md sync**: Bidirectional. Orchestrator generates per-project MEMORY.md from store. Claude Code auto-memory writes ingested back. SQLite is source of truth.
 

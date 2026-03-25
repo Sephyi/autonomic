@@ -167,7 +167,7 @@ Process:
 3. SCORE each candidate:
    For each entry e:
      fts_rank = normalized FTS5 rank (0.0 to 1.0)
-     usefulness = e.helpful_count / (e.helpful_count + e.misleading_count + 1)
+     usefulness = (e.helpful_count + 1) / (e.helpful_count + e.misleading_count + 2)  // Laplace smoothing
      days_since_access = (now - e.last_accessed).days
      decay_factor = exp(-e.decay_rate * days_since_access)
      category_boost = match e.category {
@@ -353,12 +353,12 @@ autonomic memory misleading <id>
 ### 7.2 Impact on Scoring
 
 ```
-usefulness_ratio = helpful / (helpful + misleading + 1)
+usefulness_ratio = (helpful + 1) / (helpful + misleading + 2)
 ```
 
-The `+ 1` in the denominator ensures new entries (0 helpful, 0 misleading) get a neutral score of 0.0/(0+0+1) = 0, not division by zero. After first helpful mark: 1/(1+0+1) = 0.5. After 10 helpful, 0 misleading: 10/(10+0+1) = 0.91.
+**Laplace smoothing** (Gemini review fix): The `+1/+2` ensures new entries (0 helpful, 0 misleading) get a neutral score of 1/2 = 0.5, not zero. Without this, new memories would have score 0 and never surface — the system would ignore everything it learns until manually marked helpful. After first helpful mark: 2/(2+0+2) = 0.5. After 10 helpful, 0 misleading: 11/(10+0+2) = 0.92.
 
-An entry with 3 helpful and 7 misleading: 3/(3+7+1) = 0.27 — it's being deprioritized but not removed. It might still be useful in some contexts.
+An entry with 3 helpful and 7 misleading: 4/(3+7+2) = 0.33 — deprioritized but not removed.
 
 ## 8. Auto-Capture (from OpenClaw)
 

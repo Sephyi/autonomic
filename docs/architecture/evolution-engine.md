@@ -117,6 +117,9 @@ When the evolution engine needs a parent variant to derive a new one from:
 ```
 Algorithm: SelectParent(archive, alpha=0.7)
 
+0. Precondition: the seed variant (variant-0) MUST have probe_results
+   initialized during bootstrapping. If no variants have probe_results,
+   return variant-0 as default parent. (Gemini review fix)
 1. For each variant v in archive where v.probe_results is Some:
    a. performance(v) = v.probe_results.success_rate
    b. novelty(v) = KNN_distance(v.capability_vector, archive, k=5)
@@ -204,6 +207,8 @@ Process:
 ### 4.3 Phase 3: PROPOSE (From Diagnostics to Variants)
 
 A separate session (can be different model tier) receives diagnostics and proposes config changes. This is the **repair** step, explicitly separated from diagnosis.
+
+**Clarification: Blind Analyzer vs Sighted Proposer** (Gemini review finding): The **analyzer** (Phase 2) is implementation-blind — it sees only traces, scores, and rubric. The **proposer** (Phase 3) DOES have read access to the current `ConfigVariant` because it must generate valid diffs. The separation is intentional: the critic that identifies problems should not see the implementation (prevents rationalization), but the engineer that fixes problems must see the code. This mirrors AgentDevel's architecture where diagnosis and repair are separate roles.
 
 ```rust
 pub struct EvolutionProposal {
@@ -448,7 +453,8 @@ The evolution engine should never propose changes that claim to improve model-ca
 CREATE TABLE variants (
     id TEXT PRIMARY KEY,          -- ULID
     parent_id TEXT REFERENCES variants(id),
-    surface_json TEXT NOT NULL,   -- Serialized ConfigSurface
+    surface_version INTEGER NOT NULL DEFAULT 1, -- Schema version for forward compat
+    surface_json TEXT NOT NULL,   -- Serialized ConfigSurface (versioned, see note below)
     creation_reason TEXT NOT NULL,
     source_project TEXT,
     status TEXT NOT NULL DEFAULT 'candidate',
@@ -457,6 +463,12 @@ CREATE TABLE variants (
     deployed_at TEXT,
     retired_at TEXT
 );
+
+-- NOTE (Gemini review fix): surface_json uses versioned serialization.
+-- surface_version tracks the ConfigSurface schema version. When deserializing
+-- old variants, the loader applies forward migrations (add missing fields with
+-- defaults). Old variants are NEVER rewritten — the migration happens at read time.
+-- This prevents archive corruption as the ConfigSurface struct evolves.
 
 -- Variant ancestry (for cross-pollination tracking)
 CREATE TABLE variant_ancestors (
