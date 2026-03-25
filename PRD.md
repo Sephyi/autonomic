@@ -3,8 +3,8 @@
 
 # Autonomic -- Product Requirements Document
 
-**Version**: v0.4  
-**Date**: 2026-03-25  
+**Version**: v0.5
+**Date**: 2026-03-26  
 **Status**: Planning  
 **Author**: [Sephyi](https://github.com/Sephyi) + [Claude Opus 4.6](https://www.anthropic.com/news/claude-opus-4-6) + [Gemini 3 Pro](https://deepmind.google/technologies/gemini/) + [Codex gpt-5.4](https://openai.com/index/codex/)  
 **Edition**: Rust 2024 | **MSRV**: 1.94 | **Toolchain**: stable  
@@ -16,6 +16,7 @@
 
 | Version | Date | Summary |
 | --- | --- | --- |
+| 0.5 | 2026-03-26 | Container architecture: Podman/Docker sandboxing for agent sessions. PostgreSQL (in container) replaces SQLite for shared state. sqlx (compile-time checked queries, multi-backend) replaces rusqlite. pgvector for optional semantic search. K8s-like container scheduling (ephemeral agents, warm pool, resource limits, network isolation). New crates: autonomic-db (sqlx migrations/queries), autonomic-container (Podman/Docker abstraction). compose.yaml + Containerfile added. 13 crates total (was 11). |
 | 0.4 | 2026-03-25 | Codex (gpt-5.4) review: 5 critical issues, 5 design concerns, 7 missing elements, 11 specific corrections. Fixed: Laplace math error, missing `start` variable, orphan process handling, secrets management. Added §7 Cross-Document Implementation Constraints (11 items). Clarified runtime deps. Per-project active variants. |
 | 0.3 | 2026-03-25 | Second research wave: ARTEMIS, TT-SI, MAS design patterns, Agent Skills Standard, ClaudeClaw, Clawith, Rust self-evolving agent, MARIA OS SEAA, MAS Orchestration Survey, Agyn, Awesome AI Agents 2026 (9 additional research docs, 197KB total). Key additions: daemon+watchdog two-process architecture, filesystem-level modification frontier, 6 trigger types beyond cron, SKILL.md as capability format, ARTEMIS config formalization, uncertainty-guided selective adaptation, CooperBench agent collaboration warning, system prompt re-injection on --resume constraint. 22 files, 560KB total documentation. |
 | 0.2 | 2026-03-25 | Major revision after full paper analysis (SICA, AgentDevel, GEA, DGM, DGM-Hyperagent, MARIA OS, Godel Agent — all read as full HTML from arxiv). Evolution engine redesigned: linear sidecar replaced by archive-based group evolution (GEA), flip-centered gating (AgentDevel), Lyapunov convergence bounds (MARIA OS), timed verification windows, implementation-blind analysis, cross-project evolution as primary mechanism. Architecture docs created (7 files, 218KB). Research docs created (5 files, 108KB). |
@@ -109,43 +110,50 @@ Autonomic replaces the human as the orchestration layer. The developer defines g
 ### 3.1 System Overview
 
 ```txt
-launchd (auto-start, KeepAlive, auto-restart)
+HOST (macOS / Linux)
   |
-  +-- autonomic-watchdog (lightweight monitor, ~1MB RSS)
-  |     Monitors daemon health, rolls back self-modifications on crash
+  +-- launchd (auto-start, KeepAlive)
+  |     +-- autonomic-watchdog (~1MB, health monitor, crash rollback)
+  |     +-- autonomicd (orchestrator, Rust, axum, ~5MB RSS)
+  |           +-- Decision Engine (Opus 4.6 1M, on-demand)
+  |           +-- Evolution Engine (archive-based, flip-gated, bounded)
+  |           +-- Container Scheduler (K8s-like: pool, scaling, limits)
+  |           +-- Hook Manager (compaction recovery, command guard, metrics)
+  |           +-- External Coordinator (Codex, Gemini — optional)
   |
-  +-- autonomic daemon (Rust, axum HTTP, ~5MB RSS)
-        |
-        +-- Decision Engine (Opus 4.6 1M, on-demand)
-        +-- Evolution Engine (archive-based, flip-gated, bounded)
-        +-- Memory Store (SQLite + FTS5, decay, budget assembly)
-        +-- Session Manager (Claude Code subprocess, stream-json)
-        +-- Scheduler (croner + 6 trigger types, rate-budget-aware)
-        +-- Hook Manager (compaction recovery, command guard, metrics)
-        +-- State Store (git-backed ~/.autonomic/, SQLite)
-        +-- External Coordinator (Codex, Gemini — optional)
+  +-- podman/docker compose (container infrastructure)
+        +-- postgres:17 (always-on, persistent volume)
+        |     Shared state, tsvector FTS, pgvector semantic, LISTEN/NOTIFY
+        +-- agent containers (ephemeral, on-demand)
+              Project dir mounted (rw), .claude/ config mounted (ro)
+              Network: postgres + orchestrator only (no internet default)
+              Resource limits: CPU/memory per container
 ```
 
-**Two-process architecture** (from Rust self-evolving agent research): The watchdog is a separate lightweight binary that monitors the daemon. If the daemon crashes after a self-modification (evolution deployment), the watchdog auto-reverts to the last known-good git tag before restarting. This prevents self-bricking — a daemon that evolves a broken config cannot permanently break itself.
+**Two-process architecture**: Watchdog monitors daemon, auto-reverts to last known-good git tag on crash after evolution deployment.
+
+**Container sandboxing** (from SICA, MARIA OS SEAA, OpenClaw): Agent sessions run in ephemeral Podman/Docker containers. The orchestrator manages lifecycle like a lightweight K8s scheduler — spin up on demand, tear down on completion, scale based on task queue depth and rate budget. Docker supported as alternative runtime via `ContainerRuntime` trait.
 
 ### 3.2 Workspace Structure
 
 ```txt
 crates/
 +-- autonomic-core/            # Types, traits, config (figment), errors (thiserror)
-+-- autonomic-memory/          # SQLite + FTS5, decay, context assembly
++-- autonomic-db/              # sqlx migrations, schemas, compile-time checked queries
++-- autonomic-container/       # Podman/Docker abstraction (ContainerRuntime trait)
++-- autonomic-memory/          # Memory store (tsvector FTS + pgvector semantic)
 +-- autonomic-evolution/       # Archive, variant selection, flip gating, cross-project
-+-- autonomic-session/         # Claude Code subprocess, output parsing
-+-- autonomic-scheduler/       # Cron + 6 trigger types, rate budget, adaptive
++-- autonomic-session/         # Container lifecycle + Claude Code management
++-- autonomic-scheduler/       # Cron + 6 trigger types, warm pool, rate budget
 +-- autonomic-hooks/           # Hook management (STANDALONE-CAPABLE crate)
 +-- autonomic-routing/         # Task classification, performance matrix
-+-- autonomic-state/           # Git-backed state, migrations, snapshots
-+-- autonomic-daemon/          # Main binary: axum, launchd
++-- autonomic-state/           # Git-backed config state + container volume management
++-- autonomic-daemon/          # Main binary (autonomicd): axum, launchd
 +-- autonomic-watchdog/        # Lightweight monitor: health check, crash rollback
-+-- autonomic-cli/             # CLI: status, evolve, memory, project, rollback
++-- autonomic-cli/             # CLI (autonomic): status, evolve, memory, project, rollback
 ```
 
-`autonomic-hooks` is deliberately standalone — usable without the full orchestrator. Hook and skill definitions follow the **Agent Skills Standard** SKILL.md format (YAML frontmatter + markdown, adopted by 20+ platforms) for maximum portability.
+`autonomic-hooks` is deliberately standalone — usable without the full orchestrator. `autonomic-container` abstracts Podman/Docker via the `ContainerRuntime` trait — OCI-compatible images work with either runtime.
 
 > **Full specification**: `docs/architecture/overview.md` §3 Crate Map, §3.1 Dependency Graph
 
@@ -196,7 +204,7 @@ Upper bound: N_max = floor(V(M_0) / epsilon)  ~50-200 modifications to convergen
 
 > **Full specification**: `docs/architecture/memory-system.md` (16KB, 426 lines)
 
-SQLite + FTS5 replaces Mem0/Qdrant/Ollama. Zero external dependencies. <1ms queries.
+PostgreSQL with tsvector (full-text search) + pgvector (semantic search) replaces Mem0/Qdrant/Ollama. Runs in a Podman/Docker container alongside the orchestrator. sqlx for compile-time checked queries with multi-backend support (Postgres primary, SQLite fallback for users without containers).
 
 **Entry types**: Decision (decay 0.01), Pattern (0.03), Gotcha (0.02), Preference (0.01), Tool (0.05), Error (0.08), Lesson (0.10), Ephemeral (0.20).
 
@@ -208,7 +216,9 @@ SQLite + FTS5 replaces Mem0/Qdrant/Ollama. Zero external dependencies. <1ms quer
 
 > **Full specification**: `docs/architecture/session-management.md` (43KB, 1,280 lines)
 
-Claude Code spawned via `tokio::process::Command` with `--print --output-format stream-json`. Completion via `message.type == "result"`. Cost via `total_cost_usd`. `CLAUDECODE=1` filtered from env. **Critical constraint** (discovered from ClaudeClaw source): system prompt does NOT persist across `--resume` calls — the orchestrator must re-inject system context on every session resume. Agent Teams (Opus 4.6 1M) available for complex tasks with cost threshold gate (~7x tokens). **CooperBench warning**: agents achieve ~50% lower success collaborating vs solo — Agent Teams should be used only for truly parallelizable work with orchestrator-mediated coordination, never for collaborative reasoning.
+Agent sessions run in **ephemeral Podman/Docker containers**. The orchestrator spawns containers with the project directory bind-mounted (rw), `.claude/` config mounted (ro), and Postgres connection injected via env. Claude Code runs inside the container with `--print --output-format stream-json`. Container lifecycle: create -> run -> capture output -> destroy. The orchestrator manages a **warm container pool** (pre-started base images for instant task assignment) and enforces **resource limits** (CPU/memory per container) and **network isolation** (containers reach Postgres + orchestrator API only, no internet by default).
+
+**Critical constraints**: System prompt does NOT persist across `--resume` (ClaudeClaw finding). `CLAUDECODE=1` filtered from env. **CooperBench warning**: agents achieve ~50% lower success collaborating vs solo — Agent Teams only for truly parallelizable work.
 
 ### 3.6 Model Routing
 
@@ -292,7 +302,7 @@ Spawn Claude Code as subprocess, parse stream-json output, track completion and 
 All state in `~/.autonomic/` managed as a git repository with auto-commit on every mutation.
 
 **Acceptance Criteria**:
-- [ ] `git init` on first run (via git2)
+- [ ] `git init` on first run (via gix)
 - [ ] Auto-commit on every state mutation (atomic: write tmp + rename + git add + commit)
 - [ ] `autonomic snapshot <label>` creates tagged snapshot
 - [ ] `autonomic rollback --to <tag-or-commit>` restores state
@@ -628,16 +638,19 @@ Track what the system cannot do.
 
 ## 6. Technology Stack
 
-| Component | Crate | Purpose |
+| Component | Crate / Tool | Purpose |
 | --- | --- | --- |
-| Language | Rust 2024 (1.94) | Performance, reliability, no runtime deps |
+| Language | Rust 2024 (1.94) | Performance, reliability, crash-safety |
 | Async | tokio | Process management, HTTP, scheduling |
-| HTTP | axum | CLI-daemon communication |
-| Database | rusqlite + FTS5 | Memory, metrics, state |
-| Git | git2 (libgit2) | State management, recovery |
+| HTTP | axum | CLI-daemon communication, orchestrator API |
+| Database | sqlx (Postgres primary, SQLite fallback) | Compile-time checked queries, migrations, multi-backend |
+| Search | PostgreSQL tsvector + pgvector | Full-text search + semantic vector search |
+| Git | gix (gitoxide, pure Rust) | State management, recovery (no C dependency) |
 | Config | figment | Multi-source with provenance |
 | CLI | clap 4.6 | Subcommands, completions |
 | Scheduling | croner | Cron expressions |
+| Containers | Podman (primary) / Docker (alternative) | Agent sandboxing, resource isolation |
+| Infrastructure | compose.yaml + Containerfile | Postgres container, agent base image |
 | Serialization | serde, toml, serde_json | Config, state, output |
 | Logging | tracing | Structured JSON |
 | Errors | thiserror 2.x | Typed errors per crate |
@@ -685,7 +698,7 @@ These issues were identified by Codex (gpt-5.4) reviewing all docs simultaneousl
 | ID | Decision | Rationale | Date |
 | --- | --- | --- | --- |
 | DEC-001 | Rust over TypeScript/Bun | Sub-ms startup, <10MB RSS, crash-safe, no runtime deps. A daemon should be invisible. | 2026-03-25 |
-| DEC-002 | SQLite + FTS5 over Mem0/Qdrant/Ollama | Mem0 with Ollama: slow (~200ms/entry), external processes, ignored in practice. FTS5: <1ms, precise, zero-dependency. | 2026-03-25 |
+| DEC-002 | ~~SQLite + FTS5~~ Postgres + tsvector + pgvector (superseded by DEC-025/026) | Originally SQLite; upgraded to Postgres for container concurrency, LISTEN/NOTIFY, pgvector. sqlx supports SQLite fallback. | 2026-03-26 |
 | DEC-003 | Git-backed state | Point-in-time recovery is first-class. Git: atomic commits, tags, diffs, history, clone for backup. | 2026-03-25 |
 | DEC-004 | Archive-based evolution over linear sidecar | GEA: 71% in 30 iters (archive) vs DGM: 50% in 60 iters (linear). Path-dependent improvement requires diversity. | 2026-03-25 |
 | DEC-005 | Flip-centered gating over aggregate metrics | AgentDevel: 3.1% bad releases (gated) vs 14.8% (ungated). Per-scenario regression tracking is essential. | 2026-03-25 |
@@ -707,3 +720,9 @@ These issues were identified by Codex (gpt-5.4) reviewing all docs simultaneousl
 | DEC-021 | Uncertainty-guided selective adaptation | TT-SI: +5.48% with focused adaptation vs +1.04% uniform. 5x more efficient to evolve where the system struggles. | 2026-03-25 |
 | DEC-022 | Orchestrator-mediated coordination only | CooperBench: agents achieve ~50% lower success collaborating vs solo. All inter-agent coordination flows through the orchestrator, never peer-to-peer. | 2026-03-25 |
 | DEC-023 | ARTEMIS config formalization C = (P, T, M, Theta) | Maps to ConfigSurface. Semantic GA for NL components, standard optimization for numeric. Hierarchical evaluation (cheap before expensive). | 2026-03-25 |
+| DEC-024 | Podman/Docker container sandboxing for agents | SICA, MARIA OS SEAA, OpenClaw all use container isolation. Agent sessions run in ephemeral containers with project bind-mounts, network isolation, resource limits. Podman primary (rootless, daemonless), Docker as alternative via ContainerRuntime trait. | 2026-03-26 |
+| DEC-025 | PostgreSQL over SQLite for shared state | Concurrent writes from multiple agent containers to SQLite is unreliable across mount boundaries. Postgres: true MVCC, LISTEN/NOTIFY for reactive evolution, tsvector FTS, pgvector for semantic search. Runs in container alongside agents. | 2026-03-26 |
+| DEC-026 | sqlx over rusqlite/tokio-postgres | Compile-time checked SQL queries catch errors at build time. Multi-backend (Postgres primary + SQLite fallback). Built-in migration system. | 2026-03-26 |
+| DEC-027 | K8s-like container scheduling | Orchestrator manages container pool: ephemeral per-task agents, warm pool for instant assignment, resource limits, network policies, scale based on queue depth + rate budget. | 2026-03-26 |
+| DEC-028 | pgvector for semantic search | Resolves OQ-002. Available as Postgres extension. Enables hybrid search (tsvector keyword + pgvector semantic) without external embedding service. | 2026-03-26 |
+| DEC-029 | gix over git2 | Pure Rust (no C/libgit2 dependency). Used in operator's commitbee project. Compatible with `#![forbid(unsafe_code)]`. | 2026-03-26 |

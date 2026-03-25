@@ -17,10 +17,13 @@ Configure the Autonomic repo so that any future Claude Code session can implemen
 | `CLAUDE.md` | Project instructions (~150-200 lines). Build commands, principles, crate map, phase status, dispatch table. References docs/architecture/ for depth. |
 | `README.md` | Project README with vision, architecture overview, getting started, status. |
 | `LICENSE` | Placeholder: "All Rights Reserved. License to be determined." |
-| `Cargo.toml` | Workspace root with all 11 crate stubs as members. |
+| `Cargo.toml` | Workspace root with all 13 crate stubs as members. |
 | `rust-toolchain.toml` | Pin to Rust 1.94 stable. |
 | `clippy.toml` | Workspace clippy config with MSRV and disallowed methods/macros. |
 | `deny.toml` | cargo-deny: license allowlist, advisory DB, duplicate detection. |
+| `Containerfile` | OCI base image: Rust 1.94 + Claude Code CLI + jq + common tools. |
+| `compose.yaml` | Infrastructure: postgres:17 with persistent volume, internal network. |
+| `migrations/` | sqlx migration files for Postgres schema. |
 
 ### Rules (Always Loaded Every Session)
 
@@ -167,6 +170,8 @@ Configure the Autonomic repo so that any future Claude Code session can implemen
 resolver = "3"
 members = [
     "crates/autonomic-core",
+    "crates/autonomic-db",
+    "crates/autonomic-container",
     "crates/autonomic-memory",
     "crates/autonomic-evolution",
     "crates/autonomic-session",
@@ -189,7 +194,7 @@ repository = "https://github.com/Sephyi/autonomic"
 # Shared dependency versions — crates reference via { workspace = true }
 tokio = { version = "1", features = ["full"] }
 axum = "0.8"
-rusqlite = { version = "0.39", features = ["bundled"] }  # FTS5 included via modern_sqlite in bundled
+sqlx = { version = "0.8", features = ["runtime-tokio", "postgres", "sqlite", "migrate", "chrono", "uuid"] }
 gix = { version = "0.81", default-features = false, features = ["revision", "worktree-mutation"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -296,7 +301,7 @@ wildcards = "deny"
 [dependencies]
 tokio = "1.50"
 axum = "0.8.8"
-rusqlite = "0.39.0"
+sqlx = "0.8"
 gix = "0.81.0"
 serde = "1.0"
 serde_json = "1.0"

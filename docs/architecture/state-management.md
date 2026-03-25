@@ -1,18 +1,22 @@
 # State Management
 
-All mutable state for Autonomic lives in `~/.autonomic/`, which is itself a git repository. Every mutation to files in this directory results in an atomic git commit, providing a complete audit trail and point-in-time recovery for the entire orchestrator state.
+Autonomic state is split across two stores:
+
+1. **Shared state** (sessions, metrics, traces, evolution data) lives in **PostgreSQL**, running in a Podman container. This enables concurrent multi-session writes and rich querying.
+2. **Config state** (hooks, rules, agents, specs) stays in **git-backed files** under `~/.autonomic/`. Every mutation to tracked files results in an atomic git commit, providing a complete audit trail and point-in-time recovery.
+
+PostgreSQL credentials are stored in `secrets.toml` (gitignored) and injected into the Podman compose environment. The compose file also supports Docker secrets for production deployments.
 
 ## Directory Structure
 
 ```txt
 ~/.autonomic/
   config.toml              # User configuration (model preferences, API keys ref, thresholds)
-  state.sqlite             # Session state, metrics, rate budget tracking
-  memory.sqlite            # Long-term memory store (embeddings, retrieval)
+  compose.yaml             # Podman compose for PostgreSQL + agent containers
+  secrets.toml             # Database credentials, API keys (NEVER committed)
   projects/
     <project-hash>/
       context.toml         # Project-specific overrides, model tier preferences
-      history.sqlite       # Per-project session history (not git-committed, too large)
   evolution/
     strategies.toml        # Current active evolution strategies
     changelog.toml         # Record of all strategy mutations with timestamps
@@ -40,7 +44,7 @@ The watchdog process (separate binary, `autonomic-watchdog`) integrates with sta
 
 3. **Crash rollback**: If the daemon crashes within 5 minutes of an evolution deployment (detected via PID file + git log timestamps), the watchdog:
    a. Runs `git checkout <last-known-good-tag>`
-   b. Restores SQLite from the tagged snapshot
+   b. Restores PostgreSQL from the latest `pg_dump` backup
    c. Logs the rollback event
    d. Restarts the daemon
 
@@ -63,11 +67,9 @@ Large or high-churn files are excluded from git tracking to keep the repository 
 ```txt
 # ~/.autonomic/.gitignore
 logs/
-projects/*/history.sqlite
-*.sqlite-wal
-*.sqlite-shm
+backups/              # pg_dump backups (large, managed separately)
 *.tmp
-secrets.toml          # NEVER committed — API keys, tokens
+secrets.toml          # NEVER committed — API keys, tokens, Postgres credentials
 daemon-heartbeat      # Transient runtime state
 state/sessions/*.pid  # Transient PID files
 ```
@@ -82,6 +84,9 @@ state/sessions/*.pid  # Transient PID files
 
 ```toml
 # ~/.autonomic/secrets.toml (NEVER committed)
+[database]
+url = "postgresql://autonomic:changeme@localhost:5432/autonomic"
+
 [external.codex]
 api_key = "sk-..."
 
@@ -89,11 +94,11 @@ api_key = "sk-..."
 api_key = "AI..."
 
 # Or in config.toml with env reference (committed safely):
-# [external.codex]
-# api_key = "${env:CODEX_API_KEY}"
+# [database]
+# url = "${env:DATABASE_URL}"
 ```
 
-The SQLite databases `state.sqlite` and `memory.sqlite` are committed, but only at snapshot boundaries (not on every write). Their WAL files are never committed.
+PostgreSQL credentials are also injected into the compose environment via `secrets.toml` or Docker/Podman compose secrets. The compose file references `secrets.toml` for the `POSTGRES_PASSWORD` environment variable.
 
 ## Git-Backed State
 
@@ -102,37 +107,34 @@ The SQLite databases `state.sqlite` and `memory.sqlite` are committed, but only 
 On first run, Autonomic initializes `~/.autonomic/` as a git repository:
 
 ```rust
-use git2::{Repository, Signature};
-use std::path::PathBuf;
+use gix::ThreadSafeRepository;
+use std::path::Path;
 
-fn init_state_repo(autonomic_dir: &Path) -> Result<Repository, git2::Error> {
+fn init_state_repo(autonomic_dir: &Path) -> Result<ThreadSafeRepository, gix::init::Error> {
     if autonomic_dir.join(".git").exists() {
-        Repository::open(autonomic_dir)
+        Ok(ThreadSafeRepository::open(autonomic_dir)?)
     } else {
-        let repo = Repository::init(autonomic_dir)?;
+        let repo = ThreadSafeRepository::init(autonomic_dir)?;
 
         // Create initial commit with empty tree
-        let sig = autonomic_signature()?;
-        let tree_id = {
-            let mut index = repo.index()?;
-            index.write_tree()?
+        let repo_mut = repo.to_thread_local();
+        let sig = gix::actor::SignatureRef {
+            name: "autonomic".into(),
+            email: "autonomic@localhost".into(),
+            time: gix::date::Time::now_local_or_utc(),
         };
-        let tree = repo.find_tree(tree_id)?;
-        repo.commit(
-            Some("HEAD"),
-            &sig,
-            &sig,
+        let empty_tree = repo_mut.write_object(&gix::objs::Tree::empty())?;
+        repo_mut.commit(
+            "HEAD",
+            sig,
+            sig,
             "autonomic: initialize state repository",
-            &tree,
-            &[],
+            empty_tree,
+            gix::commit::NO_PARENT_IDS,
         )?;
 
         Ok(repo)
     }
-}
-
-fn autonomic_signature() -> Result<Signature<'static>, git2::Error> {
-    Signature::now("autonomic", "autonomic@localhost")
 }
 ```
 
@@ -141,8 +143,6 @@ fn autonomic_signature() -> Result<Signature<'static>, git2::Error> {
 Every mutation to a tracked file triggers an atomic commit. The commit message encodes the operation type for machine-readable history:
 
 ```rust
-use git2::{IndexAddOption, Repository, Signature};
-
 /// Commit categories embedded in commit messages for filtering.
 #[derive(Debug, Clone, Copy)]
 enum CommitKind {
@@ -168,33 +168,36 @@ impl CommitKind {
 }
 
 fn commit_mutation(
-    repo: &Repository,
+    repo: &gix::Repository,
     paths: &[&Path],
     kind: CommitKind,
     message: &str,
-) -> Result<git2::Oid, StateError> {
-    let sig = autonomic_signature()?;
-    let mut index = repo.index()?;
+) -> Result<gix::ObjectId, StateError> {
+    let workdir = repo.work_dir().ok_or(StateError::InvalidPath)?;
+    let mut index = repo.open_index()?;
 
     for path in paths {
-        // Path must be relative to the repo workdir
-        let relative = path.strip_prefix(repo.workdir().unwrap())?;
+        let relative = path.strip_prefix(workdir)?;
         index.add_path(relative)?;
     }
-    index.write()?;
+    index.write(Default::default())?;
 
     let tree_id = index.write_tree()?;
-    let tree = repo.find_tree(tree_id)?;
-    let head = repo.head()?.peel_to_commit()?;
+    let head = repo.head_commit()?;
 
+    let sig = gix::actor::SignatureRef {
+        name: "autonomic".into(),
+        email: "autonomic@localhost".into(),
+        time: gix::date::Time::now_local_or_utc(),
+    };
     let full_message = format!("{}: {}", kind.prefix(), message);
     let oid = repo.commit(
-        Some("HEAD"),
-        &sig,
-        &sig,
+        "HEAD",
+        sig,
+        sig,
         &full_message,
-        &tree,
-        &[&head],
+        tree_id,
+        [head.id()],
     )?;
 
     Ok(oid)
@@ -213,27 +216,30 @@ Tags provide named recovery points. Three kinds of tags exist:
 
 ```rust
 fn create_tag(
-    repo: &Repository,
+    repo: &gix::Repository,
     tag_name: &str,
     message: &str,
-) -> Result<git2::Oid, git2::Error> {
-    let sig = autonomic_signature()?;
-    let head = repo.head()?.peel_to_commit()?;
-    let obj = head.as_object();
-    repo.tag(tag_name, obj, &sig, message, false)
+) -> Result<gix::ObjectId, gix::tag::Error> {
+    let head = repo.head_commit()?;
+    let sig = gix::actor::SignatureRef {
+        name: "autonomic".into(),
+        email: "autonomic@localhost".into(),
+        time: gix::date::Time::now_local_or_utc(),
+    };
+    repo.tag(tag_name, head.id(), gix::objs::Kind::Commit, sig, message, false)
 }
 
-fn create_daily_snapshot(repo: &Repository) -> Result<git2::Oid, git2::Error> {
+fn create_daily_snapshot(repo: &gix::Repository) -> Result<gix::ObjectId, gix::tag::Error> {
     let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
     let tag_name = format!("daily/{}", today);
     create_tag(repo, &tag_name, &format!("Daily snapshot {}", today))
 }
 
 fn create_evolution_snapshot(
-    repo: &Repository,
+    repo: &gix::Repository,
     evolution_id: &str,
     phase: &str,
-) -> Result<git2::Oid, git2::Error> {
+) -> Result<gix::ObjectId, gix::tag::Error> {
     let tag_name = format!("evolution/{}-{}", evolution_id, phase);
     create_tag(
         repo,
@@ -243,36 +249,30 @@ fn create_evolution_snapshot(
 }
 ```
 
-## SQLite Schemas
+## PostgreSQL Schemas
 
-### state.sqlite
+### Shared State (PostgreSQL)
+
+Sessions, metrics, rate budget, and evolution traces live in PostgreSQL (containerized). Schema migrations are managed by sqlx-cli.
 
 ```sql
--- Schema version tracked via PRAGMA user_version
--- Current version: 1
-PRAGMA user_version = 1;
-PRAGMA journal_mode = WAL;
-PRAGMA busy_timeout = 5000;
-PRAGMA synchronous = NORMAL;
-PRAGMA foreign_keys = ON;
-
 -- Active and historical sessions
 CREATE TABLE sessions (
     id              TEXT PRIMARY KEY,          -- ULID for time-sortable uniqueness
     project_hash    TEXT NOT NULL,
-    started_at      TEXT NOT NULL,             -- ISO 8601
-    ended_at        TEXT,
+    started_at      TIMESTAMPTZ NOT NULL,
+    ended_at        TIMESTAMPTZ,
     status          TEXT NOT NULL DEFAULT 'running'
                     CHECK (status IN ('running', 'completed', 'failed', 'cancelled')),
     model_tier      TEXT NOT NULL
                     CHECK (model_tier IN ('haiku', 'sonnet', 'opus')),
     prompt_hash     TEXT,                      -- SHA-256 of the initial prompt
-    tokens_input    INTEGER NOT NULL DEFAULT 0,
-    tokens_output   INTEGER NOT NULL DEFAULT 0,
-    cost_millicents INTEGER NOT NULL DEFAULT 0,
+    tokens_input    BIGINT NOT NULL DEFAULT 0,
+    tokens_output   BIGINT NOT NULL DEFAULT 0,
+    cost_millicents BIGINT NOT NULL DEFAULT 0,
     exit_code       INTEGER,
     error_message   TEXT,
-    metadata        TEXT                       -- JSON blob for extensibility
+    metadata        JSONB                      -- JSON blob for extensibility
 );
 
 CREATE INDEX idx_sessions_project ON sessions(project_hash);
@@ -281,12 +281,12 @@ CREATE INDEX idx_sessions_status ON sessions(status) WHERE status = 'running';
 
 -- Time-series metrics for observability and evolution decisions
 CREATE TABLE metrics (
-    id          INTEGER PRIMARY KEY AUTOINCREMENT,
-    timestamp   TEXT NOT NULL,                -- ISO 8601
+    id          BIGSERIAL PRIMARY KEY,
+    timestamp   TIMESTAMPTZ NOT NULL,
     session_id  TEXT REFERENCES sessions(id),
     metric_name TEXT NOT NULL,
-    metric_value REAL NOT NULL,
-    labels      TEXT,                         -- JSON key-value pairs
+    metric_value DOUBLE PRECISION NOT NULL,
+    labels      JSONB,                         -- JSON key-value pairs
     UNIQUE(timestamp, session_id, metric_name)
 );
 
@@ -295,16 +295,16 @@ CREATE INDEX idx_metrics_session ON metrics(session_id);
 
 -- Rate budget tracking: sliding window token usage
 CREATE TABLE rate_budget (
-    id              INTEGER PRIMARY KEY AUTOINCREMENT,
-    window_start    TEXT NOT NULL,            -- ISO 8601, start of 5-hour window
-    window_end      TEXT NOT NULL,
+    id              BIGSERIAL PRIMARY KEY,
+    window_start    TIMESTAMPTZ NOT NULL,      -- Start of 5-hour window
+    window_end      TIMESTAMPTZ NOT NULL,
     model_tier      TEXT NOT NULL
                     CHECK (model_tier IN ('haiku', 'sonnet', 'opus')),
-    tokens_used     INTEGER NOT NULL DEFAULT 0,
-    tokens_limit    INTEGER NOT NULL,
-    requests_used   INTEGER NOT NULL DEFAULT 0,
-    requests_limit  INTEGER NOT NULL,
-    updated_at      TEXT NOT NULL
+    tokens_used     BIGINT NOT NULL DEFAULT 0,
+    tokens_limit    BIGINT NOT NULL,
+    requests_used   BIGINT NOT NULL DEFAULT 0,
+    requests_limit  BIGINT NOT NULL,
+    updated_at      TIMESTAMPTZ NOT NULL
 );
 
 CREATE INDEX idx_rate_budget_window ON rate_budget(model_tier, window_start);
@@ -314,7 +314,7 @@ CREATE TABLE budget_allocations (
     model_tier      TEXT NOT NULL,
     subsystem       TEXT NOT NULL
                     CHECK (subsystem IN ('interactive', 'scheduled', 'evolution', 'monitoring')),
-    percentage      REAL NOT NULL CHECK (percentage >= 0 AND percentage <= 100),
+    percentage      DOUBLE PRECISION NOT NULL CHECK (percentage >= 0 AND percentage <= 100),
     PRIMARY KEY (model_tier, subsystem)
 );
 
@@ -336,10 +336,10 @@ INSERT INTO budget_allocations VALUES ('opus',   'monitoring',   5);
 ### Rust Types for State
 
 ```rust
-use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
+use sqlx::FromRow;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
 struct Session {
     id: String,
     project_hash: String,
@@ -371,7 +371,7 @@ enum ModelTier {
     Opus,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
 struct Metric {
     id: i64,
     timestamp: chrono::DateTime<chrono::Utc>,
@@ -381,7 +381,7 @@ struct Metric {
     labels: Option<serde_json::Value>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
 struct RateBudget {
     id: i64,
     window_start: chrono::DateTime<chrono::Utc>,
@@ -394,7 +394,7 @@ struct RateBudget {
     updated_at: chrono::DateTime<chrono::Utc>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
 struct BudgetAllocation {
     model_tier: ModelTier,
     subsystem: Subsystem,
@@ -431,12 +431,12 @@ use tempfile::NamedTempFile;
 
 /// Atomically write content to a file, then commit to git.
 fn atomic_write_and_commit(
-    repo: &Repository,
+    repo: &gix::Repository,
     target: &Path,
     content: &[u8],
     kind: CommitKind,
     message: &str,
-) -> Result<git2::Oid, StateError> {
+) -> Result<gix::ObjectId, StateError> {
     // 1. Write to temp file in the same directory (ensures same filesystem)
     let parent = target.parent().ok_or(StateError::InvalidPath)?;
     let mut tmp = NamedTempFile::new_in(parent)?;
@@ -454,12 +454,12 @@ fn atomic_write_and_commit(
 
 /// Atomically update a TOML config file with a merge function.
 fn atomic_toml_update<T: Serialize + for<'de> Deserialize<'de>>(
-    repo: &Repository,
+    repo: &gix::Repository,
     path: &Path,
     kind: CommitKind,
     message: &str,
     mutate: impl FnOnce(&mut T) -> Result<(), StateError>,
-) -> Result<git2::Oid, StateError> {
+) -> Result<gix::ObjectId, StateError> {
     let content = fs::read_to_string(path)?;
     let mut value: T = toml::from_str(&content)?;
     mutate(&mut value)?;
@@ -468,22 +468,9 @@ fn atomic_toml_update<T: Serialize + for<'de> Deserialize<'de>>(
 }
 ```
 
-### SQLite Mutations
+### PostgreSQL Mutations
 
-SQLite writes do not go through the atomic file write path (SQLite has its own atomicity via WAL). Instead, after a batch of SQLite operations, the orchestrator checkpoints the WAL and then commits the database file:
-
-```rust
-fn checkpoint_and_commit(
-    conn: &Connection,
-    repo: &Repository,
-    db_path: &Path,
-    message: &str,
-) -> Result<git2::Oid, StateError> {
-    // Force a WAL checkpoint so all data is in the main DB file
-    conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE)")?;
-    commit_mutation(repo, &[db_path], CommitKind::Snapshot, message)
-}
-```
+Shared state writes go directly to PostgreSQL via the sqlx connection pool. All queries use compile-time checked macros (`sqlx::query!` / `sqlx::query_as!`). PostgreSQL provides its own ACID guarantees and MVCC concurrency — no WAL checkpointing or git-commit-per-write is needed for database state. Backups use `pg_dump` scheduled via the existing job system.
 
 ## Recovery Procedures
 
@@ -496,12 +483,14 @@ autonomic rollback --to <tag-or-commit>
 The rollback command restores the `~/.autonomic/` directory to a previous state:
 
 ```rust
-fn rollback(repo: &Repository, target: &str) -> Result<(), StateError> {
+fn rollback(repo: &gix::Repository, target: &str) -> Result<(), StateError> {
     // Resolve target: could be a tag name or commit hash
-    let obj = repo.revparse_single(target)?;
-    let commit = obj
-        .peel_to_commit()
-        .map_err(|_| StateError::InvalidTarget(target.to_string()))?;
+    let target_id = repo.rev_parse_single(target)?
+        .object()?
+        .peel_to_kind(gix::objs::Kind::Commit)?
+        .id;
+
+    let target_commit = repo.find_commit(target_id)?;
 
     // Create a snapshot tag before rolling back (safety net)
     let now = chrono::Utc::now().format("%Y%m%d-%H%M%S").to_string();
@@ -511,26 +500,25 @@ fn rollback(repo: &Repository, target: &str) -> Result<(), StateError> {
         &format!("State before rollback to {}", target),
     )?;
 
-    // Reset working tree to target commit
-    let tree = commit.tree()?;
-    repo.checkout_tree(tree.as_object(), Some(
-        git2::build::CheckoutBuilder::new()
-            .force()
-            .remove_untracked(true),
-    ))?;
+    // Checkout the target tree into the working directory
+    let target_tree = target_commit.tree()?;
+    repo.checkout_tree(target_tree.id())?;
 
-    // Move HEAD to target commit, then create a new commit recording the rollback
-    // (We do NOT reset HEAD; we create a forward commit to preserve history)
-    let sig = autonomic_signature()?;
-    let head = repo.head()?.peel_to_commit()?;
+    // Create a forward commit recording the rollback (preserves history)
+    let head = repo.head_commit()?;
+    let sig = gix::actor::SignatureRef {
+        name: "autonomic".into(),
+        email: "autonomic@localhost".into(),
+        time: gix::date::Time::now_local_or_utc(),
+    };
     let rollback_message = format!("rollback: restored state to {}", target);
     repo.commit(
-        Some("HEAD"),
-        &sig,
-        &sig,
+        "HEAD",
+        sig,
+        sig,
         &rollback_message,
-        &tree,
-        &[&head],
+        target_tree.id(),
+        [head.id()],
     )?;
 
     Ok(())
@@ -541,23 +529,20 @@ Key properties of rollback:
 
 - A `pre-rollback/<timestamp>` tag is always created before any rollback, so the previous state is never lost.
 - Rollback creates a **forward commit** rather than resetting HEAD, preserving full history.
-- After rollback of TOML files, SQLite databases are rebuilt from the committed copies. Running sessions are terminated.
+- After rollback of TOML files, running sessions are terminated. PostgreSQL state is restored separately via `pg_dump` backups if needed.
 
 ### Listing Recovery Points
 
 ```rust
-fn list_tags(repo: &Repository) -> Result<Vec<TagInfo>, git2::Error> {
+fn list_tags(repo: &gix::Repository) -> Result<Vec<TagInfo>, gix::reference::iter::Error> {
     let mut tags = Vec::new();
-    repo.tag_foreach(|oid, name| {
-        let name = String::from_utf8_lossy(name).to_string();
-        // Strip "refs/tags/" prefix
-        let short_name = name.strip_prefix("refs/tags/").unwrap_or(&name).to_string();
-        tags.push(TagInfo {
-            name: short_name,
-            oid: oid.to_string(),
-        });
-        true
-    })?;
+    let refs = repo.references()?.tags()?;
+    for reference in refs {
+        let reference = reference?;
+        let name = reference.name().shorten().to_string();
+        let oid = reference.id().to_string();
+        tags.push(TagInfo { name, oid });
+    }
     Ok(tags)
 }
 
@@ -574,8 +559,8 @@ struct TagInfo {
 
 A scheduled job (see `scheduler.md`) runs daily at 03:00 UTC:
 
-1. Checkpoint all SQLite WALs (truncate mode).
-2. `git add` the SQLite database files.
+1. Run `pg_dump` to create a PostgreSQL backup in `~/.autonomic/backups/`.
+2. `git add` any changed config files.
 3. Commit with message `snapshot: daily YYYY-MM-DD`.
 4. Tag as `daily/YYYY-MM-DD`.
 5. Prune daily tags older than 30 days (keep weekly on Sundays, keep all milestone/evolution tags).
@@ -583,7 +568,7 @@ A scheduled job (see `scheduler.md`) runs daily at 03:00 UTC:
 ### Tag Pruning
 
 ```rust
-fn prune_daily_tags(repo: &Repository, keep_days: u32) -> Result<u32, StateError> {
+fn prune_daily_tags(repo: &gix::Repository, keep_days: u32) -> Result<u32, StateError> {
     let cutoff = chrono::Utc::now() - chrono::Duration::days(keep_days as i64);
     let mut pruned = 0u32;
 
@@ -671,99 +656,64 @@ impl Drop for StateLock {
 }
 ```
 
-2. SQLite in WAL mode with a 5-second busy timeout. Even though there is a single writer, WAL mode allows concurrent readers (e.g., a CLI status command querying metrics while the orchestrator is writing):
+2. PostgreSQL MVCC provides full concurrent read/write access. The sqlx connection pool handles multiple concurrent sessions without contention:
 
 ```rust
-fn open_state_db(path: &Path) -> Result<Connection, rusqlite::Error> {
-    let conn = Connection::open(path)?;
-    conn.execute_batch(
-        "PRAGMA journal_mode = WAL;
-         PRAGMA busy_timeout = 5000;
-         PRAGMA synchronous = NORMAL;
-         PRAGMA foreign_keys = ON;"
-    )?;
-    Ok(conn)
+use sqlx::postgres::PgPoolOptions;
+
+async fn create_pool(database_url: &str) -> Result<sqlx::PgPool, sqlx::Error> {
+    PgPoolOptions::new()
+        .max_connections(10)
+        .connect(database_url)
+        .await
 }
 ```
 
 ### Read-Only CLI Access
 
-Commands like `autonomic status` open the database in read-only mode:
+Commands like `autonomic status` connect to the same PostgreSQL instance. PostgreSQL MVCC ensures reads never block writes and vice versa. The CLI uses the same connection pool with a lower connection limit:
 
 ```rust
-fn open_state_db_readonly(path: &Path) -> Result<Connection, rusqlite::Error> {
-    let conn = Connection::open_with_flags(
-        path,
-        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY
-            | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
-    )?;
-    conn.execute_batch("PRAGMA busy_timeout = 1000;")?;
-    Ok(conn)
+async fn create_readonly_pool(database_url: &str) -> Result<sqlx::PgPool, sqlx::Error> {
+    PgPoolOptions::new()
+        .max_connections(2)
+        .connect(database_url)
+        .await
 }
 ```
 
 ## Migration Strategy
 
-Schema versions are tracked using SQLite's `user_version` pragma. Migrations run on startup before any other database access.
+Schema migrations are managed by `sqlx-cli` and tracked in the `migrations/` directory. Migrations run on startup before any other database access.
 
 ```rust
-const CURRENT_SCHEMA_VERSION: u32 = 1;
+use sqlx::PgPool;
 
-struct Migration {
-    version: u32,
-    description: &'static str,
-    sql: &'static str,
+async fn run_migrations(pool: &PgPool) -> Result<(), sqlx::migrate::MigrateError> {
+    sqlx::migrate!("./migrations")
+        .run(pool)
+        .await
 }
+```
 
-const MIGRATIONS: &[Migration] = &[
-    Migration {
-        version: 1,
-        description: "Initial schema",
-        sql: include_str!("../migrations/001_initial.sql"),
-    },
-    // Future migrations appended here:
-    // Migration {
-    //     version: 2,
-    //     description: "Add session tags",
-    //     sql: include_str!("../migrations/002_session_tags.sql"),
-    // },
-];
+Migration files follow the sqlx convention:
 
-fn migrate(conn: &Connection) -> Result<(), StateError> {
-    let current: u32 = conn.pragma_query_value(None, "user_version", |row| row.get(0))?;
-
-    if current > CURRENT_SCHEMA_VERSION {
-        return Err(StateError::FutureSchema {
-            found: current,
-            supported: CURRENT_SCHEMA_VERSION,
-        });
-    }
-
-    for migration in MIGRATIONS {
-        if migration.version > current {
-            conn.execute_batch(migration.sql)?;
-            conn.pragma_update(None, "user_version", migration.version)?;
-            tracing::info!(
-                version = migration.version,
-                description = migration.description,
-                "Applied migration"
-            );
-        }
-    }
-
-    Ok(())
-}
+```txt
+migrations/
+  20260325000000_initial_schema.sql
+  20260326000000_add_memory_entries.sql
+  # Future migrations appended here
 ```
 
 ### Migration Safety
 
-- Migrations run inside an implicit transaction per `execute_batch` call. If any statement fails, the entire migration is rolled back.
-- The migration runner compares `user_version` against `CURRENT_SCHEMA_VERSION`. If the database is from a newer version of Autonomic, startup aborts with a clear error rather than corrupting data.
-- Before running migrations, the orchestrator creates a git snapshot tagged `migration/v<from>-to-v<to>`.
+- Each migration runs inside an explicit transaction. If any statement fails, the entire migration is rolled back.
+- sqlx tracks applied migrations in the `_sqlx_migrations` table. If the database has migrations from a newer version, startup aborts with a clear error.
+- Before running migrations, the orchestrator creates a git snapshot tagged `migration/v<from>-to-v<to>` (for config state only; PostgreSQL state is backed up via `pg_dump`).
 
 ## Backup
 
-The entire `~/.autonomic/` directory is a git repository. Backup is trivially:
+Config state in `~/.autonomic/` is a git repository. Backup for config is trivially:
 
 ```bash
 git clone ~/.autonomic/ /path/to/backup/autonomic-$(date +%Y%m%d)
@@ -789,43 +739,38 @@ schedule = "0 4 * * *"  # Daily at 04:00 UTC
 
 The backup job:
 
-1. Runs `checkpoint_and_commit` for all SQLite databases.
-2. Pushes all branches and tags to the configured remote.
-3. Records success/failure in metrics.
+1. Runs `pg_dump` for the PostgreSQL database (via `podman exec`).
+2. Commits any changed config files to git.
+3. Pushes all branches and tags to the configured remote.
+4. Records success/failure in metrics.
 
 ## Consolidated State Manager
 
 The `StateManager` struct is the single entry point for all state operations:
 
 ```rust
-use git2::Repository;
-use rusqlite::Connection;
+use sqlx::PgPool;
 use std::path::{Path, PathBuf};
 
 struct StateManager {
     root: PathBuf,
-    repo: Repository,
-    state_db: Connection,
-    memory_db: Connection,
+    repo: gix::Repository,
+    pool: PgPool,
     lock: StateLock,
 }
 
 impl StateManager {
-    fn open(autonomic_dir: &Path) -> Result<Self, StateError> {
+    async fn open(autonomic_dir: &Path, database_url: &str) -> Result<Self, StateError> {
         let lock = StateLock::acquire(autonomic_dir)?;
-        let repo = Repository::open(autonomic_dir)?;
+        let repo = gix::open(autonomic_dir)?;
 
-        let state_db = open_state_db(&autonomic_dir.join("state.sqlite"))?;
-        migrate(&state_db)?;
-
-        let memory_db = open_state_db(&autonomic_dir.join("memory.sqlite"))?;
-        // memory_db has its own migration chain
+        let pool = create_pool(database_url).await?;
+        run_migrations(&pool).await?;
 
         Ok(StateManager {
             root: autonomic_dir.to_path_buf(),
             repo,
-            state_db,
-            memory_db,
+            pool,
             lock,
         })
     }
@@ -836,8 +781,8 @@ impl StateManager {
 
     fn update_config(
         &self,
-        mutate: impl FnOnce(&mut AutoномicConfig) -> Result<(), StateError>,
-    ) -> Result<git2::Oid, StateError> {
+        mutate: impl FnOnce(&mut AutonomicConfig) -> Result<(), StateError>,
+    ) -> Result<gix::ObjectId, StateError> {
         atomic_toml_update(
             &self.repo,
             &self.config_path(),
@@ -847,20 +792,14 @@ impl StateManager {
         )
     }
 
-    fn snapshot(&self, tag_name: &str, message: &str) -> Result<git2::Oid, StateError> {
-        // Checkpoint databases first
-        checkpoint_and_commit(
-            &self.state_db,
-            &self.repo,
-            &self.root.join("state.sqlite"),
-            "checkpoint state.sqlite for snapshot",
-        )?;
-        checkpoint_and_commit(
-            &self.memory_db,
-            &self.repo,
-            &self.root.join("memory.sqlite"),
-            "checkpoint memory.sqlite for snapshot",
-        )?;
+    async fn snapshot(&self, tag_name: &str, message: &str) -> Result<gix::ObjectId, StateError> {
+        // pg_dump for PostgreSQL backup
+        let backup_path = self.root.join("backups").join(format!("{}.sql", tag_name.replace('/', "-")));
+        tokio::fs::create_dir_all(backup_path.parent().unwrap()).await?;
+        // pg_dump executed via container: podman exec postgres pg_dump ...
+
+        // Git commit config state
+        commit_mutation(&self.repo, &[], CommitKind::Snapshot, &format!("snapshot for {}", tag_name))?;
         create_tag(&self.repo, tag_name, message).map_err(Into::into)
     }
 
@@ -868,61 +807,59 @@ impl StateManager {
         rollback(&self.repo, target)
     }
 
-    fn record_session(&self, session: &Session) -> Result<(), StateError> {
-        self.state_db.execute(
-            "INSERT INTO sessions (id, project_hash, started_at, status, model_tier, tokens_input, tokens_output, cost_millicents)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
-            rusqlite::params![
-                session.id,
-                session.project_hash,
-                session.started_at.to_rfc3339(),
-                format!("{:?}", session.status).to_lowercase(),
-                format!("{:?}", session.model_tier).to_lowercase(),
-                session.tokens_input,
-                session.tokens_output,
-                session.cost_millicents,
-            ],
-        )?;
+    async fn record_session(&self, session: &Session) -> Result<(), StateError> {
+        sqlx::query!(
+            r#"INSERT INTO sessions (id, project_hash, started_at, status, model_tier, tokens_input, tokens_output, cost_millicents)
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8)"#,
+            session.id,
+            session.project_hash,
+            session.started_at,
+            format!("{:?}", session.status).to_lowercase(),
+            format!("{:?}", session.model_tier).to_lowercase(),
+            session.tokens_input,
+            session.tokens_output,
+            session.cost_millicents,
+        )
+        .execute(&self.pool)
+        .await?;
         Ok(())
     }
 
-    fn record_metric(&self, metric: &Metric) -> Result<(), StateError> {
-        self.state_db.execute(
-            "INSERT OR REPLACE INTO metrics (timestamp, session_id, metric_name, metric_value, labels)
-             VALUES (?1, ?2, ?3, ?4, ?5)",
-            rusqlite::params![
-                metric.timestamp.to_rfc3339(),
-                metric.session_id,
-                metric.metric_name,
-                metric.metric_value,
-                metric.labels.as_ref().map(|v| v.to_string()),
-            ],
-        )?;
+    async fn record_metric(&self, metric: &Metric) -> Result<(), StateError> {
+        sqlx::query!(
+            r#"INSERT INTO metrics (timestamp, session_id, metric_name, metric_value, labels)
+               VALUES ($1, $2, $3, $4, $5)
+               ON CONFLICT (timestamp, session_id, metric_name) DO UPDATE
+               SET metric_value = EXCLUDED.metric_value, labels = EXCLUDED.labels"#,
+            metric.timestamp,
+            metric.session_id,
+            metric.metric_name,
+            metric.metric_value,
+            metric.labels.as_ref().map(|v| v.clone()),
+        )
+        .execute(&self.pool)
+        .await?;
         Ok(())
     }
 
-    fn get_budget_usage(&self, tier: ModelTier) -> Result<BudgetUsage, StateError> {
+    async fn get_budget_usage(&self, tier: ModelTier) -> Result<BudgetUsage, StateError> {
         let now = chrono::Utc::now();
         let window_start = now - chrono::Duration::hours(5);
+        let tier_str = format!("{:?}", tier).to_lowercase();
 
-        let row = self.state_db.query_row(
-            "SELECT COALESCE(SUM(tokens_used), 0), COALESCE(MAX(tokens_limit), 0),
-                    COALESCE(SUM(requests_used), 0), COALESCE(MAX(requests_limit), 0)
-             FROM rate_budget
-             WHERE model_tier = ?1 AND window_start >= ?2",
-            rusqlite::params![
-                format!("{:?}", tier).to_lowercase(),
-                window_start.to_rfc3339(),
-            ],
-            |row| {
-                Ok(BudgetUsage {
-                    tokens_used: row.get(0)?,
-                    tokens_limit: row.get(1)?,
-                    requests_used: row.get(2)?,
-                    requests_limit: row.get(3)?,
-                })
-            },
-        )?;
+        let row = sqlx::query_as!(
+            BudgetUsage,
+            r#"SELECT COALESCE(SUM(tokens_used), 0) as "tokens_used!",
+                      COALESCE(MAX(tokens_limit), 0) as "tokens_limit!",
+                      COALESCE(SUM(requests_used), 0) as "requests_used!",
+                      COALESCE(MAX(requests_limit), 0) as "requests_limit!"
+               FROM rate_budget
+               WHERE model_tier = $1 AND window_start >= $2"#,
+            tier_str,
+            window_start,
+        )
+        .fetch_one(&self.pool)
+        .await?;
 
         Ok(row)
     }
@@ -953,10 +890,10 @@ impl BudgetUsage {
 #[derive(Debug, thiserror::Error)]
 enum StateError {
     #[error("Git error: {0}")]
-    Git(#[from] git2::Error),
+    Git(#[from] gix::open::Error),
 
-    #[error("SQLite error: {0}")]
-    Sqlite(#[from] rusqlite::Error),
+    #[error("Database error: {0}")]
+    Database(#[from] sqlx::Error),
 
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
@@ -994,8 +931,8 @@ enum StateError {
 
 ```toml
 [dependencies]
-git2 = "0.19"
-rusqlite = { version = "0.32", features = ["bundled"] }
+gix = { version = "0.68", features = ["blocking-network-client"] }
+sqlx = { version = "0.8", features = ["runtime-tokio", "postgres", "chrono", "json"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 toml = "0.8"
@@ -1003,5 +940,6 @@ chrono = { version = "0.4", features = ["serde"] }
 tempfile = "3"
 thiserror = "2"
 tracing = "0.1"
+tokio = { version = "1", features = ["fs"] }
 fs4 = "0.12"
 ```

@@ -1,7 +1,7 @@
 # Memory System — Architecture Specification
 
 **Status**: Draft
-**Last updated**: 2026-03-25
+**Last updated**: 2026-03-26
 **Replaces**: Mem0 + Qdrant + Ollama (slow, imprecise, ignored in practice)
 
 ## 1. Design Rationale
@@ -17,8 +17,8 @@ The operator's experience with Mem0:
 
 ### 1.2 Design Principles
 
-1. **Zero external dependencies** — no separate server, no containers, no embedding models
-2. **Sub-millisecond queries** — FTS5 keyword search is instant for 10K entries
+1. **Containerized storage** — PostgreSQL runs in a Podman container alongside the daemon; no host-level database install required
+2. **Sub-millisecond queries** — tsvector keyword search is instant for 10K entries
 3. **Let the LLM judge relevance** — provide keyword-matched candidates, let Claude reason about which are relevant to the current task
 4. **Structured over unstructured** — typed entries with categories, scopes, and metadata vs flat markdown
 5. **Decay prevents bloat** — entries lose relevance over time; stale entries are retired, not manually pruned
@@ -26,9 +26,9 @@ The operator's experience with Mem0:
 
 ## 2. Storage Layer
 
-### 2.1 SQLite + FTS5
+### 2.1 PostgreSQL + tsvector
 
-Single SQLite database at `~/.autonomic/memory.sqlite` in WAL mode.
+PostgreSQL 17 running in a Podman container (managed by `podman compose`). The database is accessed via `sqlx` with compile-time checked queries and an async connection pool.
 
 ```sql
 -- Core memory entries
@@ -38,58 +38,42 @@ CREATE TABLE memory_entries (
     category TEXT NOT NULL,           -- Decision, Pattern, Gotcha, Preference, Tool, Error, Lesson, Ephemeral
     scope_type TEXT NOT NULL,         -- global, project, language
     scope_value TEXT,                 -- NULL for global; project name or language name otherwise
-    tags TEXT NOT NULL DEFAULT '[]',  -- JSON array of strings
+    tags JSONB NOT NULL DEFAULT '[]', -- JSON array of strings
     source_session TEXT,              -- Session ID that created this entry
     source_project TEXT,              -- Project that created this entry
     helpful_count INTEGER NOT NULL DEFAULT 0,
     misleading_count INTEGER NOT NULL DEFAULT 0,
-    decay_rate REAL NOT NULL,         -- Per-category default, overridable
+    decay_rate DOUBLE PRECISION NOT NULL, -- Per-category default, overridable
     retirement_policy TEXT NOT NULL DEFAULT 'auto', -- auto | manual_only
-    created_at TEXT NOT NULL,         -- ISO 8601
-    last_accessed TEXT NOT NULL,      -- Updated on every retrieval
-    retired_at TEXT                   -- NULL = active; set when retired
+    created_at TIMESTAMPTZ NOT NULL,
+    last_accessed TIMESTAMPTZ NOT NULL, -- Updated on every retrieval
+    retired_at TIMESTAMPTZ,           -- NULL = active; set when retired
+
+    -- tsvector column for full-text search (auto-generated)
+    search_vector TSVECTOR GENERATED ALWAYS AS (
+        setweight(to_tsvector('english', content), 'A') ||
+        setweight(to_tsvector('english', coalesce(tags::text, '')), 'B')
+    ) STORED
 );
 
--- FTS5 virtual table for full-text search
-CREATE VIRTUAL TABLE memory_fts USING fts5(
-    content,
-    tags,
-    content=memory_entries,
-    content_rowid=rowid,
-    tokenize='porter unicode61'      -- Porter stemming + unicode support
-);
+-- GIN index for full-text search (replaces FTS5 virtual table)
+CREATE INDEX idx_memory_search ON memory_entries USING GIN (search_vector);
 
--- Triggers to keep FTS5 in sync
-CREATE TRIGGER memory_ai AFTER INSERT ON memory_entries BEGIN
-    INSERT INTO memory_fts(rowid, content, tags)
-    VALUES (new.rowid, new.content, new.tags);
-END;
-
-CREATE TRIGGER memory_ad AFTER DELETE ON memory_entries BEGIN
-    INSERT INTO memory_fts(memory_fts, rowid, content, tags)
-    VALUES ('delete', old.rowid, old.content, old.tags);
-END;
-
-CREATE TRIGGER memory_au AFTER UPDATE ON memory_entries BEGIN
-    INSERT INTO memory_fts(memory_fts, rowid, content, tags)
-    VALUES ('delete', old.rowid, old.content, old.tags);
-    INSERT INTO memory_fts(rowid, content, tags)
-    VALUES (new.rowid, new.content, new.tags);
-END;
-
--- Indexes for common queries
+-- Standard indexes for common queries
 CREATE INDEX idx_memory_scope ON memory_entries(scope_type, scope_value);
 CREATE INDEX idx_memory_category ON memory_entries(category);
 CREATE INDEX idx_memory_active ON memory_entries(retired_at) WHERE retired_at IS NULL;
 CREATE INDEX idx_memory_project ON memory_entries(source_project);
 ```
 
+**Note on pgvector**: The PostgreSQL container includes the `pgvector` extension, resolving OQ-002 (semantic search path). While not active yet — tsvector keyword search remains the primary retrieval mechanism — `CREATE EXTENSION vector;` enables future semantic search with embedding vectors alongside the existing keyword approach. No external embedding server required; embeddings can be generated in-process or via a lightweight ONNX model.
+
 ## 3. Memory Entry Types
 
 ```rust
 pub enum MemoryCategory {
     /// Architectural choices with rationale.
-    /// Example: "Chose SQLite over Postgres for state — no server dependency, WAL for concurrency"
+    /// Example: "Chose containerized Postgres for state — concurrent access, tsvector FTS, pgvector-ready"
     /// Decay rate: 0.01 (near-permanent — decisions rarely become irrelevant)
     Decision,
 
@@ -153,20 +137,24 @@ Process:
    - Take up to 8 unique terms
    - Split compound identifiers (e.g., "spawn_blocking" -> "spawn", "blocking")
 
-2. QUERY FTS5 with keywords (OR semantics, not AND):
-   - SELECT * FROM memory_entries
-     JOIN memory_fts ON memory_entries.rowid = memory_fts.rowid
-     WHERE memory_fts MATCH '{keywords joined by OR}'
+2. QUERY tsvector with keywords (OR semantics via plainto_tsquery):
+   - SELECT *, ts_rank(search_vector, query) AS rank
+     FROM memory_entries,
+          plainto_tsquery('english', '{keywords}') query
+     WHERE search_vector @@ query
      AND retired_at IS NULL
      AND (scope_type = 'global'
           OR (scope_type = 'project' AND scope_value = project_id)
           OR (scope_type = 'language' AND scope_value = project_language))
-     ORDER BY rank  -- FTS5 relevance
+     ORDER BY rank DESC
      LIMIT 30       -- candidate pool
+
+   All queries use sqlx compile-time checked macros (`sqlx::query!` / `sqlx::query_as!`),
+   eliminating runtime SQL errors.
 
 3. SCORE each candidate:
    For each entry e:
-     fts_rank = normalized FTS5 rank (0.0 to 1.0)
+     fts_rank = normalized ts_rank (0.0 to 1.0)
      usefulness = (e.helpful_count + 1) / (e.helpful_count + e.misleading_count + 2)  // Laplace smoothing
      days_since_access = (now - e.last_accessed).days
      decay_factor = exp(-e.decay_rate * days_since_access)
@@ -308,11 +296,11 @@ Claude Code's auto-memory writes to MEMORY.md. The orchestrator ingests these:
 Algorithm: IngestMemoryMd(project_id, memory_md_path)
 
 1. Read current MEMORY.md content
-2. Diff against last known content (stored in memory.sqlite metadata table)
+2. Diff against last known content (stored in PostgreSQL metadata table)
 3. For each new/changed section:
    a. Parse into individual entries (split by bullet points or headers)
    b. For each entry:
-      - Check if already exists in store (FTS5 exact match on content)
+      - Check if already exists in store (tsvector exact match on content)
       - If new: create MemoryEntry with:
         category = inferred from section header or content keywords
         scope = ('project', project_id)
@@ -326,7 +314,7 @@ Algorithm: IngestMemoryMd(project_id, memory_md_path)
 
 ### 6.3 Conflict Resolution
 
-The SQLite store is the **source of truth**. MEMORY.md is a projection.
+The PostgreSQL store is the **source of truth**. MEMORY.md is a projection.
 
 - Orchestrator writes to MEMORY.md -> Claude Code reads it
 - Claude Code's auto-memory appends to MEMORY.md -> orchestrator ingests additions
@@ -377,7 +365,7 @@ Triggers (must meet at least one):
 Process:
 1. Extract candidate entries from session transcript (Haiku tier, <$0.01)
 2. For each candidate:
-   a. Check for duplicates in store (FTS5 search)
+   a. Check for duplicates in store (tsvector search)
    b. If novel: create entry with appropriate category and scope
    c. If similar to existing: update existing entry's content (fresher version)
 3. Mark new entries with source_session for provenance
@@ -417,10 +405,10 @@ autonomic memory sync <project>        # Force bidirectional sync with MEMORY.md
 
 | Operation | Target | Mechanism |
 | --- | --- | --- |
-| FTS5 keyword search (10K entries) | < 1ms | SQLite FTS5 index |
+| tsvector keyword search (10K entries) | < 1ms | PostgreSQL GIN index |
 | Context assembly (30 candidates) | < 10ms | Score + sort + format |
 | Full assembly pipeline | < 50ms | Query + score + render + write |
-| Entry creation | < 5ms | Single INSERT + FTS trigger |
+| Entry creation | < 5ms | Single INSERT + tsvector GENERATED column |
 | MEMORY.md generation | < 20ms | Query + render + atomic write |
 | MEMORY.md ingestion | < 50ms | Read + diff + parse + INSERTs |
 | Retirement scan (10K entries) | < 100ms | Single pass with score computation |

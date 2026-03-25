@@ -146,9 +146,35 @@ impl SessionConfig {
 
 ## 3. Subprocess Spawning
 
+### Container Isolation
+
+Sessions are spawned INSIDE Podman/Docker containers, not as direct host subprocesses. The orchestrator runs:
+
+```bash
+podman run --rm \
+  -v project:/workspace:rw \
+  -v claude-config:/home/agent/.claude:ro \
+  --memory 4g --cpus 2 \
+  -e ANTHROPIC_API_KEY \
+  autonomic-agent:latest \
+  claude -p "..." --output-format stream-json
+```
+
+This provides filesystem isolation, resource limits, and reproducible environments for each session. The host daemon communicates with the container via stdout/stderr streams, identical to the direct subprocess model.
+
+### Container Lifecycle
+
+```txt
+1. CREATE   — podman create with image, resource limits, env vars
+2. CONFIGURE — bind mounts (project dir, claude config), env injection, network policy
+3. RUN      — podman start, capture stdout/stderr streams
+4. CAPTURE  — parse stream-json output, track cost, enforce timeout
+5. DESTROY  — podman rm (--rm flag auto-removes on exit)
+```
+
 ### Command Construction
 
-The session manager builds the `tokio::process::Command` deterministically from a validated `SessionConfig`. No flags are inferred or defaulted at spawn time.
+The session manager builds the `tokio::process::Command` deterministically from a validated `SessionConfig`. The command targets `podman run` (or `docker run`) wrapping the `claude` CLI inside the container. No flags are inferred or defaulted at spawn time.
 
 ```rust
 use tokio::process::Command;

@@ -4,17 +4,20 @@
 
 **Goal:** Set up the complete Claude Code project environment for Autonomic so any future session can implement Phase 1 autonomously.
 
-**Architecture:** Layered context system — rules (always loaded), agents (on-dispatch), specs (on-demand), hooks (mechanical enforcement). Rust workspace with 11 crate stubs. Git-backed from the start.
+**Architecture:** Layered context system — rules (always loaded), agents (on-dispatch), specs (on-demand), hooks (mechanical enforcement). Rust workspace with 13 crate stubs. Containerized agents (Podman/Docker). PostgreSQL for shared state. Git-backed config.
 
-**Tech Stack:** Rust 2024 (1.94), tokio, axum, rusqlite+FTS5, gix, figment, clap, croner
+**Tech Stack:** Rust 2024 (1.94), tokio, axum, sqlx (Postgres+SQLite), gix, figment, clap, croner, Podman/Docker, PostgreSQL 17
 
 **Spec:** `docs/specs/2026-03-25-project-environment-design.md`
 
 ## File Map
 
 ```txt
-CREATE: Cargo.toml                          # Workspace root
+CREATE: Cargo.toml                          # Workspace root (13 crates)
 CREATE: rust-toolchain.toml                 # Pin Rust 1.94
+CREATE: Containerfile                       # OCI base image for agent containers
+CREATE: compose.yaml                        # Postgres + network infrastructure
+CREATE: migrations/001_initial.sql          # Initial Postgres schema
 CREATE: clippy.toml                         # Workspace clippy config
 CREATE: deny.toml                           # cargo-deny config
 CREATE: LICENSE                             # Placeholder
@@ -42,6 +45,10 @@ CREATE: .claude/hooks/session-context.sh    # SessionStart: context inject
 CREATE: .claude/known-dep-versions.toml     # Version pins
 CREATE: crates/autonomic-core/Cargo.toml    # Core types crate
 CREATE: crates/autonomic-core/src/lib.rs
+CREATE: crates/autonomic-db/Cargo.toml      # Database crate (sqlx)
+CREATE: crates/autonomic-db/src/lib.rs
+CREATE: crates/autonomic-container/Cargo.toml  # Container runtime crate
+CREATE: crates/autonomic-container/src/lib.rs
 CREATE: crates/autonomic-memory/Cargo.toml  # Memory crate
 CREATE: crates/autonomic-memory/src/lib.rs
 CREATE: crates/autonomic-evolution/Cargo.toml  # Evolution crate
@@ -570,7 +577,173 @@ git add CLAUDE.md .claude/known-dep-versions.toml
 git commit -m "docs: add CLAUDE.md project instructions and dependency version pins"
 ```
 
-## Task 11: Final Verification
+## Task 11: Container Infrastructure
+
+**Files:**
+- Create: `Containerfile`
+- Create: `compose.yaml`
+- Create: `migrations/001_initial.sql`
+
+- [ ] **Step 1: Create Containerfile**
+
+```dockerfile
+# Autonomic agent base image
+# OCI-compatible — works with Podman and Docker
+FROM rust:1.94-slim-bookworm
+
+# Install runtime dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    jq curl git ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Claude Code CLI
+RUN curl -fsSL https://cli.claude.ai/install.sh | sh
+
+WORKDIR /workspace
+
+# Default: run claude in print mode
+ENTRYPOINT ["claude"]
+CMD ["--help"]
+```
+
+- [ ] **Step 2: Create compose.yaml**
+
+```yaml
+# Autonomic infrastructure
+# Usage: podman compose up -d  (or docker compose up -d)
+services:
+  postgres:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: autonomic
+      POSTGRES_USER: autonomic
+      POSTGRES_PASSWORD_FILE: /run/secrets/pg_password
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./migrations:/docker-entrypoint-initdb.d:ro
+    networks:
+      - autonomic-net
+    ports:
+      - "127.0.0.1:5432:5432"  # Localhost only
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U autonomic"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+networks:
+  autonomic-net:
+    internal: true  # No internet access for agent containers
+
+volumes:
+  pgdata:
+
+secrets:
+  pg_password:
+    file: ./secrets/pg_password.txt
+```
+
+- [ ] **Step 3: Create initial migration**
+
+```sql
+-- migrations/001_initial.sql
+-- Autonomic initial schema
+
+-- Enable extensions
+CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
+CREATE EXTENSION IF NOT EXISTS "pgcrypto";
+
+-- pgvector for semantic search (install separately if needed)
+-- CREATE EXTENSION IF NOT EXISTS "vector";
+
+-- Memory entries with full-text search
+CREATE TABLE memory_entries (
+    id TEXT PRIMARY KEY,
+    content TEXT NOT NULL,
+    category TEXT NOT NULL,
+    scope_type TEXT NOT NULL,
+    scope_value TEXT,
+    tags JSONB NOT NULL DEFAULT '[]',
+    source_session TEXT,
+    source_project TEXT,
+    helpful_count INTEGER NOT NULL DEFAULT 0,
+    misleading_count INTEGER NOT NULL DEFAULT 0,
+    decay_rate DOUBLE PRECISION NOT NULL,
+    retirement_policy TEXT NOT NULL DEFAULT 'auto',
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    last_accessed TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    retired_at TIMESTAMPTZ,
+    search_vector TSVECTOR GENERATED ALWAYS AS (
+        to_tsvector('english', content || ' ' || COALESCE(tags::text, ''))
+    ) STORED
+);
+
+CREATE INDEX idx_memory_search ON memory_entries USING GIN (search_vector);
+CREATE INDEX idx_memory_scope ON memory_entries (scope_type, scope_value);
+CREATE INDEX idx_memory_active ON memory_entries (retired_at) WHERE retired_at IS NULL;
+
+-- Sessions
+CREATE TABLE sessions (
+    id TEXT PRIMARY KEY,
+    project_id TEXT NOT NULL,
+    model TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'running',
+    cost_usd DOUBLE PRECISION,
+    duration_ms BIGINT,
+    container_id TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    completed_at TIMESTAMPTZ
+);
+
+-- Experience traces
+CREATE TABLE experience_traces (
+    id TEXT PRIMARY KEY,
+    session_id TEXT REFERENCES sessions(id),
+    project_id TEXT NOT NULL,
+    variant_id TEXT,
+    model_used TEXT NOT NULL,
+    task_type TEXT,
+    outcome TEXT NOT NULL,
+    duration_ms BIGINT,
+    cost_usd DOUBLE PRECISION,
+    compaction_count INTEGER DEFAULT 0,
+    trace_json JSONB NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- Model performance matrix
+CREATE TABLE model_performance (
+    model TEXT NOT NULL,
+    task_type TEXT NOT NULL,
+    outcome TEXT NOT NULL,
+    tokens_used BIGINT,
+    cost_usd DOUBLE PRECISION,
+    duration_ms BIGINT,
+    session_id TEXT,
+    project_id TEXT,
+    recorded_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX idx_model_perf ON model_performance (model, task_type);
+```
+
+- [ ] **Step 4: Create secrets directory (gitignored)**
+
+```bash
+mkdir -p secrets
+echo "autonomic_dev_password" > secrets/pg_password.txt
+echo "secrets/" >> .gitignore
+```
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add Containerfile compose.yaml migrations/ .gitignore
+git commit -m "build: add container infrastructure (Containerfile, compose, initial migration)"
+```
+
+## Task 12: Final Verification
 
 - [ ] **Step 1: Verify workspace builds**
 
@@ -578,7 +751,61 @@ git commit -m "docs: add CLAUDE.md project instructions and dependency version p
 cargo check --workspace
 ```
 
-Expected: clean check, all 11 crates resolve, no errors.
+Expected: clean check, all 13 crates resolve, no errors.
+
+- [ ] **Step 2: Verify clippy passes**
+
+```bash
+cargo clippy --workspace --all-targets -- -D warnings
+```
+
+Expected: clean.
+
+- [ ] **Step 3: Verify fmt is clean**
+
+```bash
+cargo fmt --check --all
+```
+
+Expected: clean.
+
+- [ ] **Step 4: Verify hooks are executable**
+
+```bash
+ls -la .claude/hooks/*.sh
+```
+
+Expected: all 8 scripts have execute permission.
+
+- [ ] **Step 5: Verify settings.json parses**
+
+```bash
+python3 -c "import json; json.load(open('.claude/settings.json'))" && echo "OK"
+```
+
+Expected: OK.
+
+- [ ] **Step 6: Verify compose.yaml is valid**
+
+```bash
+podman compose config --quiet 2>/dev/null || docker compose config --quiet 2>/dev/null && echo "compose OK"
+```
+
+Expected: compose OK (validates YAML structure).
+
+- [ ] **Step 7: Verify git state is clean**
+
+```bash
+git status
+```
+
+Expected: clean working tree, all files committed.
+
+- [ ] **Step 8: Tag the milestone**
+
+```bash
+git tag -a milestone/environment-setup -m "Project environment: 13 crate stubs, 8 hooks, 5 agents, 3 specs, 2 rules, container infra"
+```
 
 - [ ] **Step 2: Verify clippy passes**
 
