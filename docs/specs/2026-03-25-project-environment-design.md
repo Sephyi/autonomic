@@ -33,9 +33,9 @@ Configure the Autonomic repo so that any future Claude Code session can implemen
 
 | File | Isolation | Tools | Purpose |
 | --- | --- | --- | --- |
-| `.claude/agents/rust-coder.md` | worktree | Read, Write, Edit, Bash, Grep, Glob, Agent | Implementation specialist. Knows crate structure, Rust 1.94 features, async patterns, error handling. |
-| `.claude/agents/evolution-engineer.md` | worktree | Read, Write, Edit, Bash, Grep, Glob, Agent | Evolution engine specialist. Knows archive, flip gating, energy function, cross-project rounds. |
-| `.claude/agents/session-architect.md` | worktree | Read, Write, Edit, Bash, Grep, Glob, Agent | Session/subprocess specialist. Knows CLI flags, stream-json, completion detection, rate budget. |
+| `.claude/agents/rust-coder.md` | worktree | Read, Write, Edit, Bash, Grep, Glob | Implementation specialist. Knows crate structure, Rust 1.94 features, async patterns, error handling. |
+| `.claude/agents/evolution-engineer.md` | worktree | Read, Write, Edit, Bash, Grep, Glob | Evolution engine specialist. Knows archive, flip gating, energy function, cross-project rounds. |
+| `.claude/agents/session-architect.md` | worktree | Read, Write, Edit, Bash, Grep, Glob | Session/subprocess specialist. Knows CLI flags, stream-json, completion detection, rate budget. |
 | `.claude/agents/security-reviewer.md` | none | Read, Bash, Grep, Glob | Safety review. Knows modification frontier, command guard, permissions. Read-only. |
 | `.claude/agents/cargo-dep-auditor.md` | none | Read, Bash, Grep, Glob | Dependency audit. Runs cargo-deny, checks advisory DB, verifies version pins. Read-only. |
 
@@ -189,12 +189,12 @@ repository = "https://github.com/Sephyi/autonomic"
 # Shared dependency versions — crates reference via { workspace = true }
 tokio = { version = "1", features = ["full"] }
 axum = "0.8"
-rusqlite = { version = "0.39", features = ["bundled", "fts5"] }
-gix = { version = "0.80", default-features = false, features = ["revision", "worktree-mutation"] }
+rusqlite = { version = "0.39", features = ["bundled"] }  # FTS5 included via modern_sqlite in bundled
+gix = { version = "0.81", default-features = false, features = ["revision", "worktree-mutation"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-toml = "0.8"
-figment = { version = "0.10", features = ["toml", "env"] }
+figment = { version = "0.10", features = ["toml", "env"] }  # Config reading (TOML + env vars)
+toml = "1"                                                    # TOML serialization (writing state/registry files)
 clap = { version = "4.6", features = ["derive"] }
 croner = "3"
 tracing = "0.1"
@@ -203,7 +203,7 @@ thiserror = "2"
 ulid = "1"
 chrono = { version = "0.4", features = ["serde"] }
 tempfile = "3"
-fs4 = "0.12"
+fs4 = "0.13"
 proptest = "1"
 insta = { version = "1", features = ["json"] }
 
@@ -294,23 +294,23 @@ wildcards = "deny"
 # The cargo-dep-auditor agent checks these against Cargo.lock.
 
 [dependencies]
-tokio = "1.44"
+tokio = "1.50"
 axum = "0.8.8"
 rusqlite = "0.39.0"
-gix = "0.80.0"
+gix = "0.81.0"
 serde = "1.0"
 serde_json = "1.0"
-toml = "0.8"
 figment = "0.10.19"
-clap = "4.6"
-croner = "3.0"
+toml = "1.1"
+clap = "4.6.0"
+croner = "3.0.1"
 tracing = "0.1"
 tracing-subscriber = "0.3"
-thiserror = "2.0"
-ulid = "1.2"
+thiserror = "2.0.18"
+ulid = "1.2.1"
 chrono = "0.4"
-tempfile = "3.19"
-fs4 = "0.12"
+tempfile = "3.27"
+fs4 = "0.13.1"
 ```
 
 ## session-context.sh Design
@@ -426,9 +426,13 @@ For inquiries, contact: me@sephy.io
 
 | Issue | Fix |
 | --- | --- |
-| `git2 = "0.19"` outdated + C dependency | Replaced with `gix = "0.80"` (pure Rust, used in operator's commitbee project) |
-| `rusqlite = "0.32"` outdated | Updated to `"0.39"` (latest, includes FTS5 improvements) |
+| `git2 = "0.19"` outdated + C dependency | Replaced with `gix = "0.81"` (pure Rust, used in operator's commitbee project, verified features on crates.io) |
+| `rusqlite = "0.32"` outdated | Updated to `"0.39"` with `features = ["bundled"]` (FTS5 included via modern_sqlite, no separate feature flag) |
 | `croner = "8"` does not exist | Fixed to `"3"` (actual latest) |
+| `toml = "0.8"` outdated | Updated to `"1"` (current major). Used for TOML serialization; figment handles reading. |
+| `fts5` feature doesn't exist on rusqlite | Removed — `bundled` includes FTS5 via `modern_sqlite` compile flag (Codex review) |
+| `Agent` tool name wrong | Removed from agent tool lists — agents use worktree isolation instead of subagent spawning (Codex review) |
+| known-dep-versions stale | Updated all versions to crates.io latest as of 2026-03-25 (Codex review) |
 | Missing `settings.json` | Full hook registration JSON added |
 | Binary name collision (both `autonomic`) | Daemon renamed to `autonomicd` |
 | `rust-toolchain.toml` wrong fields | Pin to `channel = "1.94"` (enforces MSRV) |
