@@ -3,10 +3,10 @@
 
 # Autonomic -- Product Requirements Document
 
-**Version**: v0.3  
+**Version**: v0.4  
 **Date**: 2026-03-25  
 **Status**: Planning  
-**Author**: [Sephyi](https://github.com/Sephyi) + [Claude Opus 4.6](https://www.anthropic.com/news/claude-opus-4-6) + [Gemini 3 Pro](https://deepmind.google/technologies/gemini/)  
+**Author**: [Sephyi](https://github.com/Sephyi) + [Claude Opus 4.6](https://www.anthropic.com/news/claude-opus-4-6) + [Gemini 3 Pro](https://deepmind.google/technologies/gemini/) + [Codex gpt-5.4](https://openai.com/index/codex/)  
 **Edition**: Rust 2024 | **MSRV**: 1.94 | **Toolchain**: stable  
 **License**: LicenseRef-Proprietary | **REUSE compliant**  
 **Platform**: macOS 14+ (primary), Linux (secondary)  
@@ -16,6 +16,7 @@
 
 | Version | Date | Summary |
 | --- | --- | --- |
+| 0.4 | 2026-03-25 | Codex (gpt-5.4) review: 5 critical issues, 5 design concerns, 7 missing elements, 11 specific corrections. Fixed: Laplace math error, missing `start` variable, orphan process handling, secrets management. Added §7 Cross-Document Implementation Constraints (11 items). Clarified runtime deps. Per-project active variants. |
 | 0.3 | 2026-03-25 | Second research wave: ARTEMIS, TT-SI, MAS design patterns, Agent Skills Standard, ClaudeClaw, Clawith, Rust self-evolving agent, MARIA OS SEAA, MAS Orchestration Survey, Agyn, Awesome AI Agents 2026 (9 additional research docs, 197KB total). Key additions: daemon+watchdog two-process architecture, filesystem-level modification frontier, 6 trigger types beyond cron, SKILL.md as capability format, ARTEMIS config formalization, uncertainty-guided selective adaptation, CooperBench agent collaboration warning, system prompt re-injection on --resume constraint. 22 files, 560KB total documentation. |
 | 0.2 | 2026-03-25 | Major revision after full paper analysis (SICA, AgentDevel, GEA, DGM, DGM-Hyperagent, MARIA OS, Godel Agent — all read as full HTML from arxiv). Evolution engine redesigned: linear sidecar replaced by archive-based group evolution (GEA), flip-centered gating (AgentDevel), Lyapunov convergence bounds (MARIA OS), timed verification windows, implementation-blind analysis, cross-project evolution as primary mechanism. Architecture docs created (7 files, 218KB). Research docs created (5 files, 108KB). |
 | 0.1 | 2026-03-25 | Initial PRD from comprehensive research: 11 parallel research agents analyzed Instar, OpenClaw (334K stars), Gas Town (12.8K stars), Claude Agent SDK, Google A2A protocol (v1.0), 10+ research papers on self-improving agents. User setup audit: 12+ existing hooks, 4 custom agents, multi-model routing, Mem0, Qdrant. |
@@ -42,7 +43,7 @@ Autonomic replaces the human as the orchestration layer. The developer defines g
 6. **Eventual Consistency** -- Agents fail. Sessions crash. Context compacts. The architecture treats failure as expected and designs for aggregate reliability from individually unreliable components plus validation ratchets. (Gas Town)
 7. **Graceful Degradation** -- External models (Codex, Gemini) are recommended for verification but never required. The system is fully functional with Claude alone.
 8. **Point-in-Time Recovery** -- All state is git-backed. Every mutation is an atomic commit. Any historical state is recoverable. Major milestones are tagged. Failed evolution variants are kept as data points, never deleted.
-9. **Rust-Native** -- Sub-millisecond startup, <10MB RSS, crash-safe, launchd-supervised. No runtime dependencies.
+9. **Rust-Native** -- Sub-millisecond startup, <10MB RSS, crash-safe, launchd-supervised. No runtime dependencies for the daemon binary itself. Hooks require managed system dependencies (bash, python3 for hook scripts; language-specific formatters/linters per project).
 
 ### 1.2 What This Is Not
 
@@ -643,7 +644,25 @@ Track what the system cannot do.
 | IDs | ulid | Sortable unique identifiers |
 | Testing | proptest, insta | Property-based, snapshot |
 
-## 7. Open Questions
+## 7. Cross-Document Implementation Constraints (Codex Review)
+
+These issues were identified by Codex (gpt-5.4) reviewing all docs simultaneously. They represent cross-document inconsistencies that must be resolved during implementation, not in the architecture docs.
+
+| ID | Constraint | Resolution |
+| --- | --- | --- |
+| XD-001 | Scheduler MUST spawn Claude via SessionManager, not directly | Scheduler calls `session_manager.run_session()`, never `Command::new("claude")` directly |
+| XD-002 | All experience traces go to SQLite via SessionManager Stop handler, not ad-hoc JSONL | Hooks write to a temp buffer; SessionManager flushes to `experience_traces` table on session end |
+| XD-003 | JSON/TOML mutations commit immediately; SQLite commits at snapshot boundaries only | Document this explicitly — "every mutation" means every file mutation, not every DB row |
+| XD-004 | 6 trigger types are phased: cron in Phase 3, remaining triggers in Phase 3.5 | `JobDefinition` starts with `Trigger::Cron` only; `Trigger` enum added in Phase 3.5 |
+| XD-005 | stderr must be consumed concurrently with stdout to prevent deadlock | `tokio::io::BufReader` on both stdout and stderr in `select!` loop |
+| XD-006 | Rate budget needs a single `RateBudget` contract shared by PRD, scheduler, and session manager | Define in `autonomic-core`; all subsystems reference the same struct |
+| XD-007 | Evolution archive needs per-project active variants, not a single global one | `active_variant` is `HashMap<ProjectId, VariantId>` + `global_active: VariantId` |
+| XD-008 | `rollback` must preserve gitignored files (`secrets.toml`, WAL files) | Use `git checkout` on tracked files only, never `git clean -f` |
+| XD-009 | `memory.sqlite` metadata table needed for MEMORY.md diffing | Add `memory_md_sync` table: `project_id TEXT, last_hash TEXT, last_sync TEXT` |
+| XD-010 | Evolution tables (`variants`, `probe_tasks`, etc.) belong in `state.sqlite`, not a separate DB | Single SQLite file with phase-gated table creation via migration system |
+| XD-011 | LaunchAgent plist does not inherit shell env — secrets must load from file, not env vars | `secrets.toml` is the primary secret source; env var substitution is secondary |
+
+## 8. Open Questions
 
 | ID | Question | Status |
 | --- | --- | --- |
@@ -661,7 +680,7 @@ Track what the system cannot do.
 | OQ-012 | Should capabilities follow SKILL.md format with full YAML frontmatter for cross-platform portability? | Lean yes — adopted by 20+ platforms |
 | OQ-013 | Population size for variant archive? | Start 5-10 active variants (ARTEMIS + Survey recommendation), archive unlimited |
 
-## 8. Decisions Log
+## 9. Decisions Log
 
 | ID | Decision | Rationale | Date |
 | --- | --- | --- | --- |

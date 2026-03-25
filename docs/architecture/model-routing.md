@@ -292,14 +292,15 @@ After each session:
 
 ```rust
 pub async fn dispatch_codex(prompt: &str, timeout: Duration) -> Result<ExternalResult> {
-    let output = tokio::process::Command::new("/opt/homebrew/bin/codex")
+    let start = std::time::Instant::now(); // Codex review fix: was missing
+    let child = tokio::process::Command::new("/opt/homebrew/bin/codex")
         .arg("exec")
         .arg(prompt)
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
         .spawn()?;
 
-    let result = tokio::time::timeout(timeout, output.wait_with_output()).await??;
+    let result = tokio::time::timeout(timeout, child.wait_with_output()).await??;
 
     Ok(ExternalResult {
         model: ExternalModel::Codex,
@@ -314,7 +315,8 @@ pub async fn dispatch_codex(prompt: &str, timeout: Duration) -> Result<ExternalR
 
 ```rust
 pub async fn dispatch_gemini(prompt: &str, timeout: Duration) -> Result<ExternalResult> {
-    let output = tokio::process::Command::new("/opt/homebrew/bin/gemini")
+    let start = std::time::Instant::now(); // Codex review fix: was missing
+    let child = tokio::process::Command::new("/opt/homebrew/bin/gemini")
         .arg("--model")
         .arg("gemini-3-pro-preview")
         .arg("-p")
@@ -323,7 +325,7 @@ pub async fn dispatch_gemini(prompt: &str, timeout: Duration) -> Result<External
         .stderr(std::process::Stdio::piped())
         .spawn()?;
 
-    let result = tokio::time::timeout(timeout, output.wait_with_output()).await??;
+    let result = tokio::time::timeout(timeout, child.wait_with_output()).await??;
 
     Ok(ExternalResult {
         model: ExternalModel::Gemini,

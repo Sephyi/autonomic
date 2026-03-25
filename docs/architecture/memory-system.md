@@ -356,7 +356,7 @@ autonomic memory misleading <id>
 usefulness_ratio = (helpful + 1) / (helpful + misleading + 2)
 ```
 
-**Laplace smoothing** (Gemini review fix): The `+1/+2` ensures new entries (0 helpful, 0 misleading) get a neutral score of 1/2 = 0.5, not zero. Without this, new memories would have score 0 and never surface — the system would ignore everything it learns until manually marked helpful. After first helpful mark: 2/(2+0+2) = 0.5. After 10 helpful, 0 misleading: 11/(10+0+2) = 0.92.
+**Laplace smoothing** (Gemini review fix): The `+1/+2` ensures new entries (0 helpful, 0 misleading) get a neutral score of 1/2 = 0.5, not zero. Without this, new memories would have score 0 and never surface — the system would ignore everything it learns until manually marked helpful. After first helpful mark: (1+1)/(1+0+2) = 2/3 ≈ 0.667. After 10 helpful, 0 misleading: 11/(10+0+2) = 0.917. (Codex review correction: initial example was mathematically wrong.)
 
 An entry with 3 helpful and 7 misleading: 4/(3+7+2) = 0.33 — deprioritized but not removed.
 
