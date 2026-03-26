@@ -68,16 +68,25 @@ nix = { version = "0.29", features = ["signal", "process"] }
 dashmap = "6"
 ```
 
-- [ ] **Step 2: Verify workspace resolves**
+- [ ] **Step 2: Add to known-dep-versions.toml**
+
+Add to `.claude/known-dep-versions.toml` under `[dependencies]`:
+
+```toml
+dashmap = "6"
+nix = "0.29"
+```
+
+- [ ] **Step 3: Verify workspace resolves**
 
 ```bash
 SQLX_OFFLINE=true cargo check --workspace
 ```
 
-- [ ] **Step 3: Commit**
+- [ ] **Step 4: Commit**
 
 ```bash
-git add Cargo.toml Cargo.lock
+git add Cargo.toml Cargo.lock .claude/known-dep-versions.toml
 git commit -m "build: add nix and dashmap to workspace dependencies for Phase 1B"
 ```
 
@@ -339,6 +348,12 @@ pub struct ProcessOutput {
 ///
 /// `HostRuntime` spawns directly via `tokio::process::Command`.
 /// `PodmanRuntime` (Phase 2) wraps the command in `podman run`.
+///
+/// NOTE: Uses RPITIT (return-position impl Trait in trait), which makes
+/// this trait NOT object-safe. Phase 1 uses static dispatch only. If Phase 2
+/// needs `Arc<dyn ContainerRuntime>` for runtime switching between Host/Podman/Docker,
+/// migrate to `async_trait` or `trait_variant::make(Send)`.
+// TODO(phase-2): Evaluate object safety if runtime switching is needed.
 pub trait ContainerRuntime: Send + Sync {
     fn spawn(
         &self,
@@ -864,7 +879,7 @@ git commit -m "feat(session): add SessionManager with concurrent stdout/stderr m
 
 - [ ] **Step 1: Update Cargo.toml**
 
-Add dependencies: autonomic-core, autonomic-container, autonomic-session, axum, chrono, dirs, nix, serde, serde_json, tokio, tracing, tracing-subscriber.
+Add dependencies: autonomic-core, autonomic-db, autonomic-container, autonomic-session, axum, chrono, dirs, nix, serde, serde_json, tokio, tracing, tracing-subscriber. Note: `autonomic-db` is required for DB pool creation and migrations on daemon startup.
 
 - [ ] **Step 2: Create tracing_setup.rs**
 
@@ -932,7 +947,7 @@ git commit -m "feat(daemon): add axum HTTP API with health, status, sessions, bu
 
 - [ ] **Step 1: Rewrite main.rs**
 
-`#[tokio::main]` entrypoint: determine state_dir, init tracing, load config/secrets, create PID file, find claude binary via HostRuntime::from_path(), init CostTracker + SessionManager, build router, bind axum server with graceful shutdown, cleanup PID on exit.
+`#[tokio::main]` entrypoint: determine state_dir, init tracing, load config/secrets, create PID file, **connect to PostgreSQL via `autonomic_db::create_pool(&secrets.database.url)` and run migrations via `autonomic_db::run_migrations(&pool)` (XD-002)**, find claude binary via HostRuntime::from_path(), init CostTracker + SessionManager, build router (pass pool to AppState for session trace persistence), bind axum server with graceful shutdown, cleanup PID on exit.
 
 - [ ] **Step 2: Run cargo check**
 
@@ -991,7 +1006,7 @@ git commit -m "feat(watchdog): add orphan process sweep for crashed daemon recov
 
 - [ ] **Step 1: Create rollback.rs**
 
-`rollback_to_known_good(state_dir)`: finds most recent `known-good/*` tag, creates pre-rollback snapshot, uses `git checkout <tag> -- .` (XD-008: no git clean), forward commits. Uses git CLI to keep watchdog lightweight.
+`rollback_to_known_good(state_dir)`: finds most recent `known-good/*` tag, creates pre-rollback snapshot, uses `git checkout <tag> -- .` (XD-008: no git clean), forward commits. Uses git CLI (not gix) deliberately — this is an **intentional exception** to the "gix for git ops" rule. The watchdog must not share library dependencies with the daemon it monitors; if gix or its transitive deps cause the daemon to crash, the watchdog must still function. Add a doc comment in rollback.rs explaining this rationale.
 
 - [ ] **Step 2: Commit**
 
@@ -1053,7 +1068,7 @@ cargo fmt --check --all
 ```bash
 grep "autonomic-" crates/autonomic-container/Cargo.toml   # only core
 grep "autonomic-" crates/autonomic-session/Cargo.toml      # core + container
-grep "autonomic-" crates/autonomic-daemon/Cargo.toml       # core + container + session
+grep "autonomic-" crates/autonomic-daemon/Cargo.toml       # core + db + container + session
 grep "autonomic-" crates/autonomic-watchdog/Cargo.toml     # only core
 ```
 
