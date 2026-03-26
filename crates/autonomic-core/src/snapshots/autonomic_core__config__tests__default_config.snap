@@ -1,0 +1,24 @@
+---
+source: crates/autonomic-core/src/config.rs
+expression: serialized
+---
+state_dir = "/nonexistent"
+
+[api]
+port = 7700
+bind = "127.0.0.1"
+
+[budget]
+global_budget_usd = 50.0
+
+[budget.allocation]
+interactive = 55.0
+scheduled = 15.0
+evolution = 10.0
+monitoring = 15.0
+emergency_reserve = 5.0
+
+[session]
+timeout_seconds = 1800
+cost_budget_usd = 5.0
+max_concurrent = 5

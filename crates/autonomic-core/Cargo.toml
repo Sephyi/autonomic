@@ -9,6 +9,7 @@ description = "Core types, traits, and configuration for Autonomic"
 
 [dependencies]
 chrono = { workspace = true }
+dirs = { workspace = true }
 figment = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
