@@ -3,9 +3,9 @@
 
 # Autonomic -- Product Requirements Document
 
-**Version**: v0.5  
-**Date**: 2026-03-26  
-**Status**: Planning  
+**Version**: v0.6
+**Date**: 2026-03-26
+**Status**: In Development (Phase 1 — Foundation)
 **Author**: [Sephyi](https://github.com/Sephyi) + [Claude Opus 4.6](https://www.anthropic.com/news/claude-opus-4-6) + [Gemini 3 Pro](https://deepmind.google/technologies/gemini/) + [Codex gpt-5.4](https://openai.com/index/codex/)  
 **Edition**: Rust 2024 | **MSRV**: 1.94 | **Toolchain**: stable  
 **License**: LicenseRef-Proprietary | **REUSE compliant**  
@@ -16,6 +16,7 @@
 
 | Version | Date | Summary |
 | --- | --- | --- |
+| 0.6 | 2026-03-26 | Phase 1 implementation progress: 7 of 13 crates implemented (autonomic-core, autonomic-db, autonomic-state, autonomic-container, autonomic-session, autonomic-daemon, autonomic-watchdog). 86 tests passing. FR-001 partially complete (daemon + watchdog binaries, HTTP API, tracing, PID, graceful shutdown, crash rollback — missing launchd plists and frozen-file enforcement). FR-003 partially complete (session spawning, stream-json parsing, cost tracking, timeout, env filtering — missing worktree isolation and resume re-injection). FR-004 partially complete (git init, atomic commits — missing CLI commands and daily snapshot). Milestones tagged: `milestone/phase-1a`, `milestone/phase-1b`. |
 | 0.5 | 2026-03-26 | Container architecture: Podman/Docker sandboxing for agent sessions. PostgreSQL (in container) replaces SQLite for shared state. sqlx (compile-time checked queries, multi-backend) replaces rusqlite. pgvector for optional semantic search. K8s-like container scheduling (ephemeral agents, warm pool, resource limits, network isolation). New crates: autonomic-db (sqlx migrations/queries), autonomic-container (Podman/Docker abstraction). compose.yaml + Containerfile added. 13 crates total (was 11). |
 | 0.4 | 2026-03-25 | Codex (gpt-5.4) review: 5 critical issues, 5 design concerns, 7 missing elements, 11 specific corrections. Fixed: Laplace math error, missing `start` variable, orphan process handling, secrets management. Added §7 Cross-Document Implementation Constraints (11 items). Clarified runtime deps. Per-project active variants. |
 | 0.3 | 2026-03-25 | Second research wave: ARTEMIS, TT-SI, MAS design patterns, Agent Skills Standard, ClaudeClaw, Clawith, Rust self-evolving agent, MARIA OS SEAA, MAS Orchestration Survey, Agyn, Awesome AI Agents 2026 (9 additional research docs, 197KB total). Key additions: daemon+watchdog two-process architecture, filesystem-level modification frontier, 6 trigger types beyond cron, SKILL.md as capability format, ARTEMIS config formalization, uncertainty-guided selective adaptation, CooperBench agent collaboration warning, system prompt re-injection on --resume constraint. 22 files, 560KB total documentation. |
@@ -210,7 +211,7 @@ PostgreSQL with tsvector (full-text search) + pgvector (semantic search) replace
 
 **Context assembly**: FTS5 keyword search -> scope filter -> score (`FTS_rank * usefulness_laplace * exp(-decay * days) * category_boost`, where `usefulness_laplace = (helpful+1)/(helpful+misleading+2)`) -> token-budgeted packing with primacy/recency ordering -> inject via SessionStart hook.
 
-**MEMORY.md sync**: Bidirectional. Orchestrator generates per-project MEMORY.md from store. Claude Code auto-memory writes ingested back. SQLite is source of truth.
+**MEMORY.md sync**: Bidirectional. Orchestrator generates per-project MEMORY.md from store. Claude Code auto-memory writes ingested back. PostgreSQL is source of truth.
 
 ### 3.5 Session Management
 
@@ -242,11 +243,11 @@ Global hooks: compaction-recovery (inject identity + memory after context compre
 
 > **Full specification**: `docs/architecture/state-management.md` (28KB, 957 lines)
 
-Git-backed `~/.autonomic/`. Auto-commit every mutation. Tags for evolution events, milestones, daily snapshots. `autonomic rollback --to <tag>` restores any state. SQLite WAL mode. Single-writer principle.
+Git-backed `~/.autonomic/`. Auto-commit every mutation. Tags for evolution events, milestones, daily snapshots. `autonomic rollback --to <tag>` restores any state. PostgreSQL for shared state. Single-writer principle for git operations.
 
 ## 4. Feature Requirements
 
-### 4.1 Phase 1: Foundation -- v0.1.0
+### 4.1 Phase 1: Foundation -- v0.1.0 `IN PROGRESS`
 
 **Target**: Persistent daemon with project registry, session management, and basic metrics.
 
@@ -259,12 +260,12 @@ Two-process architecture: daemon (main binary) + watchdog (lightweight monitor).
 **Acceptance Criteria**:
 - [ ] Daemon binary starts via launchd Launch Agent plist
 - [ ] Watchdog binary starts via separate launchd plist, monitors daemon health
-- [ ] Watchdog auto-reverts to last known-good git tag if daemon crashes after evolution deployment
+- [x] Watchdog auto-reverts to last known-good git tag if daemon crashes after evolution deployment
 - [ ] Daemon auto-restarts within 10s of crash (KeepAlive)
-- [ ] Structured tracing to `~/.autonomic/logs/daemon.log`
-- [ ] HTTP API on localhost (axum) for CLI communication
-- [ ] PID file at `~/.autonomic/daemon.pid`
-- [ ] Graceful shutdown on SIGTERM (drain active sessions)
+- [x] Structured tracing to `~/.autonomic/logs/daemon.log`
+- [x] HTTP API on localhost (axum) for CLI communication
+- [x] PID file at `~/.autonomic/daemon.pid`
+- [x] Graceful shutdown on SIGTERM (drain active sessions)
 - [ ] Frozen files enforced at filesystem level (`chmod 444`) — watchdog verifies on startup
 
 #### FR-002: Project Registry
@@ -286,12 +287,12 @@ TOML-based project registration with auto-discovery.
 Spawn Claude Code as subprocess, parse stream-json output, track completion and cost.
 
 **Acceptance Criteria**:
-- [ ] Spawn `claude -p <prompt> --output-format stream-json` as subprocess
-- [ ] Parse typed messages from NDJSON stdout
-- [ ] Detect completion (`result` message with `success` subtype)
-- [ ] Track `total_cost_usd` per session
-- [ ] Enforce configurable timeout (default 30min)
-- [ ] Filter `CLAUDECODE=1` from subprocess environment
+- [x] Spawn `claude -p <prompt> --output-format stream-json` as subprocess
+- [x] Parse typed messages from NDJSON stdout
+- [x] Detect completion (`result` message with `success` subtype)
+- [x] Track `total_cost_usd` per session
+- [x] Enforce configurable timeout (default 30min)
+- [x] Filter `CLAUDECODE=1` from subprocess environment
 - [ ] Worktree isolation via `git worktree` for parallel sessions
 - [ ] Re-inject system prompt on every `--resume` call (it does NOT persist across resumes — ClaudeClaw finding)
 
@@ -302,8 +303,8 @@ Spawn Claude Code as subprocess, parse stream-json output, track completion and 
 All state in `~/.autonomic/` managed as a git repository with auto-commit on every mutation.
 
 **Acceptance Criteria**:
-- [ ] `git init` on first run (via gix)
-- [ ] Auto-commit on every state mutation (atomic: write tmp + rename + git add + commit)
+- [x] `git init` on first run (via gix)
+- [x] Auto-commit on every state mutation (atomic: write tmp + rename + git add + commit)
 - [ ] `autonomic snapshot <label>` creates tagged snapshot
 - [ ] `autonomic rollback --to <tag-or-commit>` restores state
 - [ ] Daily auto-snapshot via internal scheduler
@@ -316,7 +317,7 @@ SessionStart and Stop hooks that collect structured experience traces.
 
 **Acceptance Criteria**:
 - [ ] Stop hook logs: duration, tool calls, errors, model used, cost, compaction count
-- [ ] Traces stored in SQLite (`state.sqlite`, `experience_traces` table)
+- [ ] Traces stored in PostgreSQL (`experience_traces` table)
 - [ ] `autonomic metrics show` displays recent session summaries
 - [ ] `autonomic metrics export --format csv` for external analysis
 
@@ -328,11 +329,11 @@ SessionStart and Stop hooks that collect structured experience traces.
 
 **Priority**: P0 | **Phase**: 2
 
-SQLite + FTS5 with typed entries, scoped queries, decay-on-read, and usefulness tracking.
+PostgreSQL + tsvector with typed entries, scoped queries, decay-on-read, and usefulness tracking.
 
 **Acceptance Criteria**:
 - [ ] CRUD for memory entries with all schema fields (8 categories, 3 scopes)
-- [ ] FTS5 keyword search < 1ms for 10K entries
+- [ ] tsvector keyword search < 1ms for 10K entries
 - [ ] Scope filtering: global, project, language
 - [ ] Decay applied at query time (not on write)
 - [ ] `mark_helpful(id)` / `mark_misleading(id)` for usefulness
@@ -344,8 +345,8 @@ SQLite + FTS5 with typed entries, scoped queries, decay-on-read, and usefulness 
 Token-budgeted assembly injected via SessionStart hook.
 
 **Acceptance Criteria**:
-- [ ] FTS5 search with prompt keywords (OR semantics)
-- [ ] Score: `FTS_rank * usefulness * exp(-decay * days) * category_boost`
+- [ ] tsvector search with prompt keywords (OR semantics)
+- [ ] Score: `ts_rank * usefulness * exp(-decay * days) * category_boost`
 - [ ] Token budget (default 4K) with tiered rendering
 - [ ] Primacy/recency ordering (decisions at start, patterns at end)
 - [ ] Inject via hook stdout, compatible with Claude Code
@@ -354,12 +355,12 @@ Token-budgeted assembly injected via SessionStart hook.
 
 **Priority**: P1 | **Phase**: 2
 
-Two-way sync between SQLite store and Claude Code's native MEMORY.md.
+Two-way sync between PostgreSQL store and Claude Code's native MEMORY.md.
 
 **Acceptance Criteria**:
 - [ ] Generate per-project MEMORY.md from store (filtered by scope)
 - [ ] Ingest Claude Code auto-memory additions into store
-- [ ] SQLite is source of truth; MEMORY.md is a projection
+- [ ] PostgreSQL is source of truth; MEMORY.md is a projection
 - [ ] Sync on session start and session end
 
 #### FR-009: Compaction Recovery Hook
@@ -410,8 +411,8 @@ TOML-defined jobs with multiple trigger types, model tier, and priority.
 Track and enforce token budget across all sessions.
 
 **Acceptance Criteria**:
-- [ ] Track `total_cost_usd` per session
-- [ ] 5-hour sliding window aggregation
+- [x] Track `total_cost_usd` per session
+- [x] 5-hour sliding window aggregation
 - [ ] Budget allocation enforcement (15/55/15/10/5 split)
 - [ ] Adaptive degradation at 80% utilization
 - [ ] `autonomic budget show`
@@ -623,7 +624,7 @@ Track what the system cannot do.
 ### 5.2 Reliability
 
 - launchd KeepAlive auto-restart
-- SQLite WAL mode (concurrent read/write)
+- PostgreSQL MVCC (concurrent read/write across agent containers)
 - Atomic mutations (tmp + rename + git commit)
 - Graceful SIGTERM shutdown (drain sessions)
 - No data loss on crash (WAL + git)
@@ -664,15 +665,15 @@ These issues were identified by Codex (gpt-5.4) reviewing all docs simultaneousl
 | ID | Constraint | Resolution |
 | --- | --- | --- |
 | XD-001 | Scheduler MUST spawn Claude via SessionManager, not directly | Scheduler calls `session_manager.run_session()`, never `Command::new("claude")` directly |
-| XD-002 | All experience traces go to SQLite via SessionManager Stop handler, not ad-hoc JSONL | Hooks write to a temp buffer; SessionManager flushes to `experience_traces` table on session end |
-| XD-003 | JSON/TOML mutations commit immediately; SQLite commits at snapshot boundaries only | Document this explicitly — "every mutation" means every file mutation, not every DB row |
+| XD-002 | All experience traces go to PostgreSQL via SessionManager Stop handler, not ad-hoc JSONL | Hooks write to a temp buffer; SessionManager flushes to `experience_traces` table on session end |
+| XD-003 | JSON/TOML mutations commit immediately; PostgreSQL writes are transactional | Document this explicitly — "every mutation" means every file mutation triggers a git commit; DB writes use standard transactions |
 | XD-004 | 6 trigger types are phased: cron in Phase 3, remaining triggers in Phase 3.5 | `JobDefinition` starts with `Trigger::Cron` only; `Trigger` enum added in Phase 3.5 |
 | XD-005 | stderr must be consumed concurrently with stdout to prevent deadlock | `tokio::io::BufReader` on both stdout and stderr in `select!` loop |
 | XD-006 | Rate budget needs a single `RateBudget` contract shared by PRD, scheduler, and session manager | Define in `autonomic-core`; all subsystems reference the same struct |
 | XD-007 | Evolution archive needs per-project active variants, not a single global one | `active_variant` is `HashMap<ProjectId, VariantId>` + `global_active: VariantId` |
 | XD-008 | `rollback` must preserve gitignored files (`secrets.toml`, WAL files) | Use `git checkout` on tracked files only, never `git clean -f` |
 | XD-009 | `memory.sqlite` metadata table needed for MEMORY.md diffing | Add `memory_md_sync` table: `project_id TEXT, last_hash TEXT, last_sync TEXT` |
-| XD-010 | Evolution tables (`variants`, `probe_tasks`, etc.) belong in `state.sqlite`, not a separate DB | Single SQLite file with phase-gated table creation via migration system |
+| XD-010 | Evolution tables (`variants`, `probe_tasks`, etc.) belong in the shared PostgreSQL database | Single database with phase-gated table creation via sqlx migration system |
 | XD-011 | LaunchAgent plist does not inherit shell env — secrets must load from file, not env vars | `secrets.toml` is the primary secret source; env var substitution is secondary |
 
 ## 8. Open Questions

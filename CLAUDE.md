@@ -45,7 +45,7 @@ HOST
 
 ## Current Phase
 
-**Phase 0: Environment Setup** -- In progress. Next: Phase 1 -- Foundation (FR-001 through FR-005).
+**Phase 1: Foundation** -- In progress (FR-001 through FR-005). Core infrastructure implemented: autonomic-core, autonomic-db, autonomic-state, autonomic-container, autonomic-session, autonomic-daemon, autonomic-watchdog. Milestones tagged: `milestone/phase-1a` (types, config, db, state), `milestone/phase-1b` (container, session, daemon, watchdog). Remaining: CLI (`autonomic run/status`), POST session API endpoint, project registry (FR-002), metrics collection (FR-005), launchd plists, frozen-file enforcement.
 
 ## Core Principles
 
@@ -69,7 +69,8 @@ When working on a specific subsystem, read the corresponding architecture doc fi
 | State management | `docs/architecture/state-management.md` |
 | Model routing | `docs/architecture/model-routing.md` |
 | Full overview | `docs/architecture/overview.md` |
-| Requirements | `PRD.md` (v0.5, 26 FRs, 6 phases) |
+| Requirements | `PRD.md` (v0.6, 26 FRs, 6 phases) |
+| Plans | `docs/plans/` (11 plans: env setup + Phase 1A-1C + Phase 2A-2B + Phase 3-6) |
 | All sources | `SOURCES.md` |
 
 ## Key Constraints (Always Active)

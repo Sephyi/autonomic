@@ -12,9 +12,9 @@
 
 | Plan | Crates | FRs Covered | Depends On |
 | --- | --- | --- | --- |
-| [Phase 1A: Foundation Layer](2026-03-26-phase-1a-foundation-layer.md) | `autonomic-core`, `autonomic-db`, `autonomic-state` | FR-004 (Git State), FR-005 partial (trace schema) | Environment setup |
-| Phase 1B: Session Pipeline | `autonomic-session`, `autonomic-container`, `autonomic-daemon`, `autonomic-watchdog` | FR-001 (Daemon+Watchdog), FR-003 (Sessions) | Phase 1A |
-| Phase 1C: User Interface | `autonomic-cli` | FR-002 (Project Registry), FR-005 (Metrics) | Phase 1A + 1B |
+| [Phase 1A: Foundation Layer](2026-03-26-phase-1a-foundation-layer.md) | `autonomic-core`, `autonomic-db`, `autonomic-state` | FR-004 (Git State), FR-005 partial (trace schema) | Environment setup | **DONE** |
+| [Phase 1B: Session Pipeline](2026-03-26-phase-1b-session-pipeline.md) | `autonomic-session`, `autonomic-container`, `autonomic-daemon`, `autonomic-watchdog` | FR-001 (Daemon+Watchdog), FR-003 (Sessions) | Phase 1A | **DONE** |
+| [Phase 1C: User Interface](2026-03-26-phase-1c-user-interface.md) | `autonomic-cli` | FR-002 (Project Registry), FR-005 (Metrics), FR-001 remaining | Phase 1A + 1B | Planned |
 
 ## Dependency Graph
 
