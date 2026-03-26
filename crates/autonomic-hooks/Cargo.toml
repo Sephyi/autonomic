@@ -1,0 +1,10 @@
+[package]
+name = "autonomic-hooks"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Hook management for Claude Code lifecycle events (standalone-capable)"
+
+[dependencies]

@@ -1,0 +1,14 @@
+[package]
+name = "autonomic-watchdog"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Lightweight watchdog monitor for the Autonomic daemon"
+
+[[bin]]
+name = "autonomic-watchdog"
+path = "src/main.rs"
+
+[dependencies]

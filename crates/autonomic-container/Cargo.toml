@@ -1,0 +1,10 @@
+[package]
+name = "autonomic-container"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Podman/Docker container runtime abstraction for Autonomic"
+
+[dependencies]

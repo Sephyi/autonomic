@@ -1,0 +1,48 @@
+[workspace]
+resolver = "3"
+members = [
+    "crates/autonomic-core",
+    "crates/autonomic-db",
+    "crates/autonomic-container",
+    "crates/autonomic-memory",
+    "crates/autonomic-evolution",
+    "crates/autonomic-session",
+    "crates/autonomic-scheduler",
+    "crates/autonomic-hooks",
+    "crates/autonomic-routing",
+    "crates/autonomic-state",
+    "crates/autonomic-daemon",
+    "crates/autonomic-watchdog",
+    "crates/autonomic-cli",
+]
+
+[workspace.package]
+edition = "2024"
+rust-version = "1.94"
+license = "LicenseRef-Proprietary"
+repository = "https://github.com/Sephyi/autonomic"
+
+[workspace.dependencies]
+# Shared dependency versions — crates reference via { workspace = true }
+tokio = { version = "1", features = ["full"] }
+axum = "0.8"
+sqlx = { version = "0.8", features = ["runtime-tokio", "postgres", "sqlite", "migrate", "chrono", "uuid"] }
+gix = { version = "0.81", default-features = false, features = ["revision", "worktree-mutation"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+figment = { version = "0.10", features = ["toml", "env"] }  # Config reading (TOML + env vars)
+toml = "1"                                                    # TOML serialization (writing state/registry files)
+clap = { version = "4.6", features = ["derive"] }
+croner = "3"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["json", "env-filter"] }
+thiserror = "2"
+ulid = "1"
+chrono = { version = "0.4", features = ["serde"] }
+tempfile = "3"
+fs4 = "0.13"
+proptest = "1"
+insta = { version = "1", features = ["json"] }
+
+[profile.release]
+overflow-checks = true

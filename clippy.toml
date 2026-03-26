@@ -1,0 +1,91 @@
+# Project-wide clippy configuration for Autonomic.
+# Applied automatically by `cargo clippy`.
+# Requires enabling the corresponding lints in lib.rs or Cargo.toml.
+
+# --- MSRV ---
+msrv = "1.94"
+
+# --- Async Safety ---
+
+# Catch types held across .await that cause deadlocks or block the runtime.
+# Autonomic shares state across async tasks (rate budget, container pool, session registry).
+await-holding-invalid-types = [
+    { path = "std::sync::MutexGuard", reason = "Deadlock risk: std::sync::MutexGuard held across .await. Clone data out of lock before awaiting." },
+    { path = "std::sync::RwLockReadGuard", reason = "Held across .await blocks other tasks. Clone data out first." },
+    { path = "std::sync::RwLockWriteGuard", reason = "Held across .await blocks other tasks. Clone data out first." },
+]
+
+# Catch accidentally large futures (subprocess buffers, container specs captured in async blocks).
+future-size-threshold = 16384
+
+# --- Complexity Thresholds ---
+
+# Flag overly complex functions for refactoring
+cognitive-complexity-threshold = 25
+
+# Limit function parameters (signal to refactor into config struct)
+too-many-arguments-threshold = 7
+
+# Catch large enum variants (common in error types)
+enum-variant-size-threshold = 200
+
+# Catch large stack frames (buffers should be heap-allocated)
+stack-size-threshold = 512000
+
+# Limit trivial copy size (force pass-by-reference for larger types)
+trivial-copy-size-limit = 16
+
+# Large types should be passed by reference, not value
+pass-by-value-size-limit = 256
+
+# --- Blocking in Async ---
+
+# Ban blocking methods that should never appear in async code.
+# Requires: #![warn(clippy::disallowed_methods)] in each crate root.
+[[disallowed-methods]]
+path = "std::thread::sleep"
+reason = "Blocks the tokio runtime. Use tokio::time::sleep().await"
+
+[[disallowed-methods]]
+path = "std::thread::spawn"
+reason = "Use tokio::spawn for async tasks or tokio::task::spawn_blocking for blocking work"
+
+[[disallowed-methods]]
+path = "std::process::Command::new"
+reason = "Use tokio::process::Command for async subprocess management"
+
+[[disallowed-methods]]
+path = "std::fs::read"
+reason = "Blocks the async runtime. Use tokio::fs::read or wrap in spawn_blocking"
+
+[[disallowed-methods]]
+path = "std::fs::write"
+reason = "Blocks the async runtime. Use tokio::fs::write or wrap in spawn_blocking"
+
+[[disallowed-methods]]
+path = "std::fs::read_to_string"
+reason = "Blocks the async runtime. Use tokio::fs::read_to_string or wrap in spawn_blocking"
+
+[[disallowed-methods]]
+path = "std::fs::create_dir_all"
+reason = "Blocks the async runtime. Use tokio::fs::create_dir_all or wrap in spawn_blocking"
+
+[[disallowed-methods]]
+path = "std::fs::remove_file"
+reason = "Blocks the async runtime. Use tokio::fs::remove_file or wrap in spawn_blocking"
+
+# --- Debug / Logging Hygiene ---
+
+# Ban debug macros that bypass structured logging.
+# Requires: #![warn(clippy::disallowed_macros)] in each crate root.
+[[disallowed-macros]]
+path = "std::dbg"
+reason = "Use tracing::debug! for structured diagnostics"
+
+[[disallowed-macros]]
+path = "std::println"
+reason = "Use tracing::info! or tracing::debug! for structured output. println! bypasses log filtering"
+
+[[disallowed-macros]]
+path = "std::eprintln"
+reason = "Use tracing::warn! or tracing::error! for structured output. eprintln! bypasses log filtering"

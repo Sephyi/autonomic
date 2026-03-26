@@ -1,0 +1,10 @@
+[package]
+name = "autonomic-scheduler"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Cron-based job scheduling with rate budget awareness"
+
+[dependencies]
