@@ -45,6 +45,8 @@ proptest = "1"
 insta = { version = "1", features = ["json"] }
 sha2 = "0.10"
 dirs = "6"
+nix = { version = "0.29", features = ["signal", "process"] }
+dashmap = "6"
 
 [workspace.lints.clippy]
 disallowed_methods = "warn"
