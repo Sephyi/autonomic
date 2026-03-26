@@ -12,6 +12,19 @@ name = "autonomicd"
 path = "src/main.rs"
 
 [dependencies]
+autonomic-core = { path = "../autonomic-core" }
+autonomic-db = { path = "../autonomic-db" }
+autonomic-container = { path = "../autonomic-container" }
+autonomic-session = { path = "../autonomic-session" }
+axum = { workspace = true }
+chrono = { workspace = true }
+dirs = { workspace = true }
+nix = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
 
 [lints]
 workspace = true
