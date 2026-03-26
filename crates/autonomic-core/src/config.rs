@@ -129,7 +129,7 @@ impl Default for SessionDefaults {
 }
 
 /// Secrets loaded from secrets.toml (gitignored, per XD-011).
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct SecretsConfig {
     /// Database connection details.
     #[serde(default)]
@@ -151,14 +151,6 @@ impl Default for DatabaseSecrets {
     fn default() -> Self {
         Self {
             url: default_database_url(),
-        }
-    }
-}
-
-impl Default for SecretsConfig {
-    fn default() -> Self {
-        Self {
-            database: DatabaseSecrets::default(),
         }
     }
 }
