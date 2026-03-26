@@ -8,3 +8,6 @@ repository.workspace = true
 description = "Core types, traits, and configuration for Autonomic"
 
 [dependencies]
+
+[lints]
+workspace = true

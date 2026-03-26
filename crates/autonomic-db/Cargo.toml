@@ -8,3 +8,6 @@ repository.workspace = true
 description = "Database migrations, schemas, and compile-time checked queries for Autonomic"
 
 [dependencies]
+
+[lints]
+workspace = true

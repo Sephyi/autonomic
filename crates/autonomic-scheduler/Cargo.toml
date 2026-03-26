@@ -8,3 +8,6 @@ repository.workspace = true
 description = "Cron-based job scheduling with rate budget awareness"
 
 [dependencies]
+
+[lints]
+workspace = true

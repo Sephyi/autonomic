@@ -44,5 +44,15 @@ fs4 = "0.13"
 proptest = "1"
 insta = { version = "1", features = ["json"] }
 
+[workspace.lints.clippy]
+disallowed_methods = "warn"
+disallowed_macros = "warn"
+await_holding_invalid_type = "warn"
+large_futures = "warn"
+large_stack_frames = "warn"
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
 [profile.release]
 overflow-checks = true

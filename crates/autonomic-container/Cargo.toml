@@ -8,3 +8,6 @@ repository.workspace = true
 description = "Podman/Docker container runtime abstraction for Autonomic"
 
 [dependencies]
+
+[lints]
+workspace = true

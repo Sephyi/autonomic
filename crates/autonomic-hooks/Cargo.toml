@@ -8,3 +8,6 @@ repository.workspace = true
 description = "Hook management for Claude Code lifecycle events (standalone-capable)"
 
 [dependencies]
+
+[lints]
+workspace = true

@@ -8,3 +8,6 @@ repository.workspace = true
 description = "Archive-based self-improvement with flip-centered gating and convergence bounds"
 
 [dependencies]
+
+[lints]
+workspace = true

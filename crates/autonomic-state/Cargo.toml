@@ -8,3 +8,6 @@ repository.workspace = true
 description = "Git-backed state management with point-in-time recovery"
 
 [dependencies]
+
+[lints]
+workspace = true

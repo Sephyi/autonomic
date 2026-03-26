@@ -8,3 +8,6 @@ repository.workspace = true
 description = "Claude Code subprocess management, output parsing, and cost tracking"
 
 [dependencies]
+
+[lints]
+workspace = true

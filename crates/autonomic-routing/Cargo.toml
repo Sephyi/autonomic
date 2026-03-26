@@ -8,3 +8,6 @@ repository.workspace = true
 description = "Task classification and model routing with empirical learning"
 
 [dependencies]
+
+[lints]
+workspace = true
