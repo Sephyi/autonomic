@@ -77,3 +77,52 @@ CREATE TABLE model_performance (
 );
 
 CREATE INDEX idx_model_perf ON model_performance (model, task_type);
+
+-- Projects registry (FR-002)
+CREATE TABLE projects (
+    id TEXT PRIMARY KEY,
+    path TEXT NOT NULL UNIQUE,
+    name TEXT NOT NULL,
+    language TEXT,
+    last_activity TIMESTAMPTZ,
+    last_session_cost_usd DOUBLE PRECISION,
+    hook_count INTEGER NOT NULL DEFAULT 0,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- Metrics time-series (FR-005)
+CREATE TABLE metrics (
+    id BIGSERIAL PRIMARY KEY,
+    timestamp TIMESTAMPTZ NOT NULL,
+    session_id TEXT REFERENCES sessions(id),
+    metric_name TEXT NOT NULL,
+    metric_value DOUBLE PRECISION NOT NULL,
+    labels JSONB,
+    UNIQUE(timestamp, session_id, metric_name)
+);
+
+CREATE INDEX idx_metrics_name_time ON metrics(metric_name, timestamp);
+CREATE INDEX idx_metrics_session ON metrics(session_id);
+
+-- Rate budget tracking
+CREATE TABLE rate_budget (
+    id BIGSERIAL PRIMARY KEY,
+    window_start TIMESTAMPTZ NOT NULL,
+    window_end TIMESTAMPTZ NOT NULL,
+    model_tier TEXT NOT NULL,
+    tokens_used BIGINT NOT NULL DEFAULT 0,
+    tokens_limit BIGINT NOT NULL,
+    requests_used BIGINT NOT NULL DEFAULT 0,
+    requests_limit BIGINT NOT NULL,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX idx_rate_budget_window ON rate_budget(model_tier, window_start);
+
+-- Memory sync metadata (XD-009)
+CREATE TABLE memory_md_sync (
+    project_id TEXT PRIMARY KEY,
+    last_hash TEXT NOT NULL,
+    last_sync TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
