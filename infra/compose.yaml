@@ -1,0 +1,35 @@
+# Autonomic infrastructure
+# Usage: podman compose up -d  (or docker compose up -d)
+services:
+  postgres:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: autonomic
+      POSTGRES_USER: autonomic
+      POSTGRES_PASSWORD_FILE: /run/secrets/pg_password
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./migrations:/docker-entrypoint-initdb.d:ro
+    networks:
+      - autonomic-net
+    ports:
+      - "127.0.0.1:5432:5432"  # Localhost only
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U autonomic"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    secrets:
+      - pg_password
+
+networks:
+  autonomic-net:
+    internal: true  # No internet access for agent containers
+
+volumes:
+  pgdata:
+
+secrets:
+  pg_password:
+    file: ./secrets/pg_password.txt

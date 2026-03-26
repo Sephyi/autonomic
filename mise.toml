@@ -1,0 +1,134 @@
+[tools]
+rust = "1.94.0"
+
+[env]
+CARGO_TERM_COLOR = "always"
+
+# Setup
+
+[tasks.setup]
+description = "Configure git hooks and start infrastructure"
+run = """
+git config core.hooksPath .githooks
+echo "Git hooks configured to use .githooks/"
+"""
+
+# Check (type-check only — faster than build)
+
+[tasks.check]
+description = "Type-check all workspace crates"
+run = "cargo check --workspace"
+
+# Build
+
+[tasks.build]
+description = "Build all workspace crates (debug)"
+run = "cargo build --workspace"
+
+[tasks."build:release"]
+description = "Build all workspace crates (release)"
+run = "cargo build --workspace --release"
+
+[tasks."build:daemon"]
+description = "Build the daemon binary (debug)"
+run = "cargo build -p autonomic-daemon"
+
+[tasks."build:cli"]
+description = "Build the CLI binary (debug)"
+run = "cargo build -p autonomic-cli"
+
+# Format
+
+[tasks.fmt]
+description = "Format all Rust files"
+run = "cargo fmt --all"
+
+[tasks."fmt:check"]
+description = "Check formatting without modifying files"
+run = "cargo fmt --all --check"
+
+# Lint + Audit
+
+[tasks.clippy]
+description = "Run clippy lints on all targets"
+run = "cargo clippy --workspace --all-targets -- -D warnings"
+
+[tasks.deny]
+description = "Run cargo-deny license and advisory checks"
+run = "cargo deny check"
+
+# Test
+
+[tasks.test]
+description = "Run all unit tests"
+run = "cargo test --workspace"
+
+[tasks."test:crate"]
+description = "Run tests for a specific crate (pass crate name after --)"
+run = "cargo test -p"
+
+# Infrastructure
+
+[tasks."infra:up"]
+description = "Start Postgres container"
+run = """
+podman compose -f infra/compose.yaml up -d
+echo "Waiting for Postgres health..."
+for i in $(seq 1 30); do
+  if podman compose -f infra/compose.yaml exec postgres pg_isready -U autonomic >/dev/null 2>&1; then
+    echo "Postgres healthy after $i seconds"
+    break
+  fi
+  sleep 1
+done
+"""
+
+[tasks."infra:down"]
+description = "Stop Postgres container"
+run = "podman compose -f infra/compose.yaml down"
+
+[tasks."infra:reset"]
+description = "Stop Postgres and remove volume data"
+run = "podman compose -f infra/compose.yaml down -v"
+
+[tasks."infra:status"]
+description = "Check infrastructure health"
+run = "podman compose -f infra/compose.yaml ps"
+
+[tasks."infra:psql"]
+description = "Open psql shell to Autonomic database"
+run = "podman compose -f infra/compose.yaml exec postgres psql -U autonomic"
+
+# CI
+
+[tasks.ci]
+description = "Run full CI gate: fmt, clippy, tests, deny"
+depends = ["fmt:check", "clippy", "test", "deny"]
+
+# Docs + Utilities
+
+[tasks.doc]
+description = "Build and open API documentation"
+run = "cargo doc --workspace --no-deps --open"
+
+[tasks."doc:build"]
+description = "Build API documentation (no browser)"
+run = "cargo doc --workspace --no-deps"
+
+[tasks.clean]
+description = "Remove build artifacts"
+run = "cargo clean"
+
+# Run binaries
+
+[tasks.daemon]
+description = "Run the daemon in debug mode"
+run = "cargo run -p autonomic-daemon --"
+
+[tasks.cli]
+description = "Run the CLI in debug mode (pass args after --)"
+run = "cargo run -p autonomic-cli --"
+
+[tasks.watchdog]
+description = "Run the watchdog in debug mode"
+run = "cargo run -p autonomic-watchdog --"

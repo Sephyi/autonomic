@@ -10,8 +10,8 @@ cargo test --workspace           # Run all tests
 cargo clippy --workspace --all-targets -- -D warnings  # Lint
 cargo fmt --check --all          # Format check
 cargo deny check                 # Dependency audit
-podman compose up -d             # Start Postgres (or: docker compose up -d)
-podman compose ps                # Check infrastructure health
+podman compose -f infra/compose.yaml up -d   # Start Postgres (or: docker compose)
+podman compose -f infra/compose.yaml ps      # Check infrastructure health
 ```
 
 ## Architecture

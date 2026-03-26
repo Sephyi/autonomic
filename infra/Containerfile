@@ -1,0 +1,17 @@
+# Autonomic agent base image
+# OCI-compatible — works with Podman and Docker
+FROM rust:1.94-slim-bookworm
+
+# Install runtime dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    jq curl git ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Claude Code CLI
+RUN curl -fsSL https://cli.claude.ai/install.sh | sh
+
+WORKDIR /workspace
+
+# Default: run claude in print mode
+ENTRYPOINT ["claude"]
+CMD ["--help"]
