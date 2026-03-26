@@ -104,6 +104,10 @@ pub struct SessionDefaults {
     /// Maximum concurrent sessions.
     #[serde(default = "default_max_concurrent")]
     pub max_concurrent: usize,
+
+    /// Override path to the Claude Code binary. If unset, searches `$PATH`.
+    #[serde(default)]
+    pub claude_binary: Option<PathBuf>,
 }
 
 fn default_timeout() -> u64 {
@@ -124,6 +128,7 @@ impl Default for SessionDefaults {
             timeout_seconds: default_timeout(),
             cost_budget_usd: default_cost_budget(),
             max_concurrent: default_max_concurrent(),
+            claude_binary: None,
         }
     }
 }

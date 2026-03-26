@@ -85,7 +85,7 @@ async fn main() {
     };
 
     // 6. Connect to PostgreSQL and run migrations (warn on failure, don't exit).
-    let _db_pool = match autonomic_db::create_pool(&secrets.database.url).await {
+    let db_pool = match autonomic_db::create_pool(&secrets.database.url).await {
         Ok(pool) => {
             if let Err(e) = autonomic_db::run_migrations(&pool).await {
                 tracing::warn!(error = %e, "database migrations failed, some features may be unavailable");
@@ -98,13 +98,16 @@ async fn main() {
         }
     };
 
-    // 7. Find the claude binary.
-    let runtime = HostRuntime::new();
+    // 7. Find the claude binary (configurable via config.toml, falls back to $PATH).
+    let runtime = match config.session.claude_binary {
+        Some(ref path) => HostRuntime::from_path(path.clone()),
+        None => HostRuntime::new(),
+    };
     let claude_binary = runtime.claude_binary().clone();
     if !claude_binary.exists() {
         tracing::warn!(
             path = %claude_binary.display(),
-            "claude binary not found on PATH, sessions will fail until it is installed"
+            "claude binary not found, sessions will fail until it is installed"
         );
     } else {
         tracing::info!(path = %claude_binary.display(), "claude binary found");
@@ -133,6 +136,7 @@ async fn main() {
         session_manager,
         cost_tracker,
         start_time,
+        db_pool,
     });
     let router = api::build_router(app_state);
 

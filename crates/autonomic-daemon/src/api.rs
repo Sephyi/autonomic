@@ -21,6 +21,10 @@ pub struct AppState {
     pub cost_tracker: Arc<CostTracker>,
     /// When the daemon process started.
     pub start_time: Instant,
+    /// PostgreSQL connection pool (XD-002: experience traces to Postgres).
+    /// Used by POST /api/v1/sessions (Phase 1C) and trace persistence.
+    #[allow(dead_code)]
+    pub db_pool: Option<autonomic_db::PgPool>,
 }
 
 /// Build the axum router with all API routes.
