@@ -337,7 +337,7 @@ echo "Phase: $PHASE"
 echo ""
 echo "Key Constraints (always active):"
 echo "  XD-001: Scheduler MUST spawn Claude via SessionManager, never directly"
-echo "  XD-002: All traces go to SQLite via SessionManager, not ad-hoc JSONL"
+echo "  XD-002: All traces go to PostgreSQL via SessionManager, not ad-hoc JSONL"
 echo "  XD-005: stderr must be consumed concurrently with stdout (deadlock prevention)"
 echo "  XD-006: Single RateBudget contract shared across all subsystems"
 echo "  XD-008: Rollback must preserve gitignored files (secrets.toml, WAL)"
@@ -363,7 +363,7 @@ exit 0
 | vox-scribe | Autonomic | Change |
 | --- | --- | --- |
 | `rust-fmt.sh` | `rust-fmt.sh` | Same pattern, updated crate names |
-| `clippy-gate.sh` | `clippy-gate.sh` | Updated crate-case mapping for 11 crates |
+| `clippy-gate.sh` | `clippy-gate.sh` | Updated crate-case mapping for 13 crates |
 | `cargo-test-gate.sh` | `cargo-test-gate.sh` | Same pattern |
 | `spdx-header-check.sh` | REMOVED | Not required |
 | `edition-check.sh` | REMOVED | Handled by rust-toolchain.toml |
@@ -404,7 +404,7 @@ Lint: cargo clippy --workspace -- -D warnings
 
 ## Documentation
 
-- PRD.md — Product requirements (v0.4)
+- PRD.md — Product requirements (v0.5)
 - docs/architecture/ — Implementation specs (8 files, 226KB)
 - docs/research/ — Research paper analyses (9 files, 197KB)
 - SOURCES.md — All research sources

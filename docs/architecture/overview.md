@@ -246,7 +246,7 @@ Between sessions:
 | DEC-023 | ARTEMIS formalization | C=(P,T,M,Theta), semantic GA + Bayesian | ARTEMIS paper |
 | DEC-024 | Container sandboxing | Agent sessions run inside Podman/Docker containers, not as host subprocesses. Filesystem isolation, resource limits, reproducible environments. | Container architecture |
 | DEC-025 | PostgreSQL over SQLite | Concurrent multi-session writes, tsvector FTS, pgvector for future embeddings, rich query planner. Containerized — no host install required. | Database migration |
-| DEC-026 | sqlx over rusqlite | Compile-time checked SQL queries, async-native, connection pooling. Eliminates runtime SQL errors. | Database migration |
+| DEC-026 | sqlx over sqlx | Compile-time checked SQL queries, async-native, connection pooling. Eliminates runtime SQL errors. | Database migration |
 | DEC-027 | K8s-like scheduling | Container lifecycle mirrors Kubernetes pod model: create -> configure (mounts, env, limits) -> run -> capture -> destroy. | Container architecture |
 | DEC-028 | pgvector for semantic search | Extension available in Postgres container. Resolves OQ-002 (semantic search path). Not active yet — tsvector keyword search is primary. | Memory system spec |
 | DEC-029 | gix over git2 | Pure Rust, no libgit2 C dependency, better async compatibility, actively maintained. | State management |

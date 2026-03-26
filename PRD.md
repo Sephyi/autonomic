@@ -80,7 +80,7 @@ Autonomic replaces the human as the orchestration layer. The developer defines g
 4. **Rust-native daemon** -- Sub-ms startup, ~5MB RSS, crash-safe, launchd-supervised.
 5. **Git-backed state with full history** -- Every mutation is atomic. Roll back to any point. Diff changes. Failed variants are data, not waste.
 6. **Empirical model routing** -- Builds a performance matrix from measured outcomes, overriding heuristics when data is sufficient.
-7. **Zero-dependency memory** -- SQLite + FTS5 replaces Mem0/Qdrant/Ollama. <1ms queries, no external processes.
+7. **Containerized memory** -- PostgreSQL with tsvector + pgvector replaces Mem0/Qdrant/Ollama. Compile-time checked queries via sqlx. Runs alongside agents in Podman/Docker.
 
 ### 2.3 Key Inspirations
 

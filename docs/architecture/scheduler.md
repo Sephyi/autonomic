@@ -28,7 +28,7 @@ priority = "critical"
 timeout_seconds = 120
 prompt = """
 Perform a health check of the Autonomic system:
-1. Verify state.sqlite is accessible and schema is current
+1. Verify PostgreSQL is accessible and schema is current
 2. Check disk usage of ~/.autonomic/
 3. Verify git repository integrity (git fsck --quick)
 4. Report rate budget status for all tiers
@@ -825,7 +825,7 @@ impl Scheduler {
         self.state.state_db.execute(
             "INSERT INTO metrics (timestamp, metric_name, metric_value, labels)
              VALUES (?1, ?2, ?3, ?4)",
-            rusqlite::params![
+            sqlx::query!(
                 exec.started_at.to_rfc3339(),
                 format!("scheduler.execution.{}", exec.job_name),
                 match exec.status {
@@ -1154,7 +1154,7 @@ enum BudgetDecision {
 
 ### Allocation Percentages
 
-Default budget allocation across subsystems (configurable in `state.sqlite` `budget_allocations` table):
+Default budget allocation across subsystems (configurable in `PostgreSQL` `budget_allocations` table):
 
 | Tier | Interactive | Scheduled | Evolution | Monitoring |
 | --- | --- | --- | --- | --- |
@@ -1279,7 +1279,7 @@ enum JobError {
     State(#[from] StateError),
 
     #[error("Git error: {0}")]
-    Git(#[from] git2::Error),
+    Git(#[from] gix::open::Error),
 }
 
 impl JobError {
@@ -1301,8 +1301,8 @@ serde_json = "1"
 toml = "0.8"
 tracing = "0.1"
 thiserror = "2"
-rusqlite = { version = "0.32", features = ["bundled"] }
-git2 = "0.19"
+sqlx = { version = "0.8", features = ["runtime-tokio", "postgres"] }
+gix = { version = "0.81", default-features = false, features = ["revision"] }
 ```
 
 ## Integration with State Management
@@ -1311,9 +1311,9 @@ The scheduler interacts with the state management system (see `state-management.
 
 1. **Job config** (`schedules/jobs.toml`): Tracked by git. Changes trigger a `schedule: ...` commit.
 2. **Schedule state** (`schedules/state.toml`): Tracked by git. Updated after every job execution.
-3. **Metrics**: Written to `state.sqlite` via `StateManager::record_metric`.
-4. **Budget tracking**: Read from `state.sqlite` `rate_budget` table; written back after each job.
+3. **Metrics**: Written to `PostgreSQL` via `StateManager::record_metric`.
+4. **Budget tracking**: Read from `PostgreSQL` `rate_budget` table; written back after each job.
 5. **Snapshots**: The `daily_snapshot` built-in job calls `StateManager::snapshot`.
 6. **Evolution tags**: Jobs with `pre_snapshot = true` create evolution tags via `StateManager`.
 
-The scheduler never writes to SQLite directly; it always goes through the `StateManager` API to maintain the single-writer invariant.
+The scheduler never writes to PostgreSQL directly; it always goes through the `StateManager` API to maintain the single-writer invariant.

@@ -146,7 +146,7 @@ description = "Core types, traits, and configuration for Autonomic"
 Repeat the pattern for: `autonomic-memory`, `autonomic-evolution`, `autonomic-session`, `autonomic-scheduler`, `autonomic-hooks`, `autonomic-routing`, `autonomic-state`. Each gets the same template with appropriate `name` and `description`.
 
 Descriptions:
-- `autonomic-memory`: "SQLite + FTS5 memory store with decay, context assembly, and MEMORY.md sync"
+- `autonomic-memory`: "PostgreSQL memory store with tsvector FTS, pgvector semantic search, context assembly, and MEMORY.md sync"
 - `autonomic-evolution`: "Archive-based self-improvement with flip-centered gating and convergence bounds"
 - `autonomic-session`: "Claude Code subprocess management, output parsing, and cost tracking"
 - `autonomic-scheduler`: "Cron-based job scheduling with rate budget awareness"
@@ -206,13 +206,13 @@ Same Cargo.toml pattern. Binary name: `autonomic`. Description: "CLI interface f
 cargo check --workspace
 ```
 
-Expected: clean check with no errors. All 11 crates resolve.
+Expected: clean check with no errors. All 13 crates resolve.
 
 - [ ] **Step 5: Commit all workspace files together**
 
 ```bash
 git add Cargo.toml rust-toolchain.toml clippy.toml deny.toml crates/
-git commit -m "build: add Rust workspace with 11 crate stubs, toolchain pin, clippy and deny config"
+git commit -m "build: add Rust workspace with 13 crate stubs, toolchain pin, clippy and deny config"
 ```
 
 ## Task 4: LICENSE and README
@@ -241,7 +241,7 @@ Follow the structure from spec §README.md Structure (lines 377-410). Include:
 - 3-4 sentence description
 - Status section (Phase 0: Environment Setup)
 - Architecture diagram from `docs/architecture/overview.md` (the text-based system diagram)
-- Crate map listing all 11 crates
+- Crate map listing all 13 crates
 - Getting started: prerequisites (Rust 1.94, cargo-deny, **jq** for hook scripts), build, test, lint
 - Documentation links (PRD.md, docs/architecture/, docs/research/, SOURCES.md)
 - License notice
@@ -475,7 +475,7 @@ git commit -m "ci: register hooks in .claude/settings.json"
 
 - [ ] **Step 2: Create architecture-invariants.md**
 
-~50 lines covering: crate dependency direction (core has no deps on siblings, daemon depends on everything), SessionManager is the ONLY way to spawn Claude Code (XD-001), all experience traces go to SQLite (XD-002), stderr consumed concurrently with stdout (XD-005), single RateBudget contract (XD-006), rollback preserves gitignored files (XD-008), evolution engine never modifies frozen files, gix for git operations (not git2), secrets in secrets.toml (never config.toml).
+~50 lines covering: crate dependency direction (core has no deps on siblings, daemon depends on everything), SessionManager is the ONLY way to spawn Claude Code (XD-001), all experience traces go to PostgreSQL (XD-002), stderr consumed concurrently with stdout (XD-005), single RateBudget contract (XD-006), rollback preserves gitignored files (XD-008), evolution engine never modifies frozen files, gix for git operations (not git2), secrets in secrets.toml (never config.toml).
 
 - [ ] **Step 3: Commit**
 
@@ -491,11 +491,11 @@ git commit -m "docs: add Claude Code rules (rust.md, architecture-invariants.md)
 
 - [ ] **Step 1: Create rust-1.94-features.md**
 
-Adapt from vox-scribe's `.claude/specs/rust-1.94-features.md`. Keep the general Rust 1.94 features (let chains, generic_arg_infer, LazyLock::get, async closures, precise capturing, trait upcasting). Remove vox-scribe-specific audio pipeline features. Add relevant ones for Autonomic: process management patterns, SQLite patterns, git operations.
+Adapt from vox-scribe's `.claude/specs/rust-1.94-features.md`. Keep the general Rust 1.94 features (let chains, generic_arg_infer, LazyLock::get, async closures, precise capturing, trait upcasting). Remove vox-scribe-specific audio pipeline features. Add relevant ones for Autonomic: process management patterns, PostgreSQL patterns, git operations.
 
 - [ ] **Step 2: Create async-concurrency.md**
 
-Tokio patterns for Autonomic specifically: subprocess management with `tokio::process::Command`, concurrent stdout/stderr consumption with `tokio::io::BufReader` in `select!`, `tokio::time::timeout` for session enforcement, `croner` integration with tokio for scheduling, `tokio::sync::mpsc` for inter-component communication, `tokio::sync::watch` for config broadcast, never block the runtime (spawn_blocking for gix operations and SQLite if needed).
+Tokio patterns for Autonomic specifically: subprocess management with `tokio::process::Command`, concurrent stdout/stderr consumption with `tokio::io::BufReader` in `select!`, `tokio::time::timeout` for session enforcement, `croner` integration with tokio for scheduling, `tokio::sync::mpsc` for inter-component communication, `tokio::sync::watch` for config broadcast, never block the runtime (spawn_blocking for gix operations if needed).
 
 - [ ] **Step 3: Create cross-document-constraints.md**
 
@@ -557,7 +557,7 @@ Follow the 10-section structure from spec §CLAUDE.md Structure (lines 150-161).
 Key sections:
 1. "Autonomic — persistent, self-improving orchestrator for autonomous AI development"
 2. Quick reference: `cargo build --workspace`, `cargo test --workspace`, `cargo clippy --workspace -- -D warnings`, `cargo deny check`
-3. Architecture summary + crate map (all 11 crates, one line each)
+3. Architecture summary + crate map (all 13 crates, one line each)
 4. Current Phase: Phase 0 — Environment Setup (complete). Next: Phase 1 — Foundation.
 5. Core principles: Structure > Willpower, Archive-Based Evolution, Gate on Regressions, Bounded Self-Modification, Verifiable Outcomes Only
 6. Dispatch table mapping work areas to docs/architecture/*.md files
@@ -805,50 +805,4 @@ Expected: clean working tree, all files committed.
 
 ```bash
 git tag -a milestone/environment-setup -m "Project environment: 13 crate stubs, 8 hooks, 5 agents, 3 specs, 2 rules, container infra"
-```
-
-- [ ] **Step 2: Verify clippy passes**
-
-```bash
-cargo clippy --workspace --all-targets -- -D warnings
-```
-
-Expected: clean (empty crates have nothing to lint).
-
-- [ ] **Step 3: Verify fmt is clean**
-
-```bash
-cargo fmt --check --all
-```
-
-Expected: clean.
-
-- [ ] **Step 4: Verify hooks are executable**
-
-```bash
-ls -la .claude/hooks/*.sh
-```
-
-Expected: all 8 scripts have execute permission.
-
-- [ ] **Step 5: Verify settings.json parses**
-
-```bash
-python3 -c "import json; json.load(open('.claude/settings.json'))" && echo "OK"
-```
-
-Expected: OK.
-
-- [ ] **Step 6: Verify git state is clean**
-
-```bash
-git status
-```
-
-Expected: clean working tree, all files committed.
-
-- [ ] **Step 7: Tag the milestone**
-
-```bash
-git tag -a milestone/environment-setup -m "Project environment complete: 11 crate stubs, 8 hooks, 5 agents, 3 specs, 2 rules"
 ```

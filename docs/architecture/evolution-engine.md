@@ -446,7 +446,7 @@ Based on SICA's finding that scaffold improvements cannot substitute for model c
 
 The evolution engine should never propose changes that claim to improve model-capability-shaped outcomes. If diagnostics identify a model-capability limitation, it creates a **capability gap entry** (not an evolution proposal) noting that the limitation is model-bound and may resolve with future model updates.
 
-## 9. Data Schema (SQLite)
+## 9. Data Schema (PostgreSQL)
 
 ```sql
 -- Variant archive
