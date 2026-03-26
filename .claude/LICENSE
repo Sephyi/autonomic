@@ -1,0 +1,29 @@
+The files in this directory and all subdirectories (.claude/) are licensed under:
+
+    GNU Affero General Public License v3.0 only (AGPL-3.0-only)
+    with Commons Clause restriction
+
+Copyright (c) 2026 Sephyi <me@sephy.io>
+
+Commons Clause Restriction:
+
+    The software is provided under the terms of the AGPL-3.0, with the
+    following additional condition ("Commons Clause"):
+
+    Without a separate commercial license agreement, you may not use this
+    software for commercial purposes, including but not limited to:
+    selling the software, offering it as a hosted/managed service for a
+    fee, or using it as a component of a commercial product.
+
+This means:
+- You may use, modify, and distribute these files for non-commercial purposes
+- Any derivative work MUST be released under the same license (AGPL-3.0 + Commons Clause)
+- If you use these files in a network service, you MUST make your
+  modified source available to users of that service
+- You must preserve copyright notices and license terms
+- Commercial use requires a separate commercial license
+
+Full AGPL-3.0 text: https://www.gnu.org/licenses/agpl-3.0.html
+Commons Clause: https://commonsclause.com
+
+For commercial licensing inquiries, contact: me@sephy.io
