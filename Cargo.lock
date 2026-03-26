@@ -54,6 +54,15 @@ version = "0.1.0"
 [[package]]
 name = "autonomic-container"
 version = "0.1.0"
+dependencies = [
+ "autonomic-core",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror",
+ "tokio",
+ "tracing",
+]
 
 [[package]]
 name = "autonomic-core"
