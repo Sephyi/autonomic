@@ -10,6 +10,8 @@
 
 **Spec:** `docs/architecture/overview.md`, `docs/architecture/state-management.md`, `.claude/specs/cross-document-constraints.md`
 
+**Prereqs already applied:** `[workspace.lints]` in root `Cargo.toml` enables `unsafe_code = "forbid"`, `clippy::disallowed_methods`, `clippy::disallowed_macros`, `clippy::await_holding_invalid_type`, `clippy::large_futures`, `clippy::large_stack_frames` across all crates. Each crate's `Cargo.toml` inherits via `[lints] workspace = true`. No per-file `#![forbid]` or `#![warn]` attributes needed.
+
 ## File Map
 
 ```txt
@@ -59,6 +61,7 @@ chrono = { workspace = true }
 figment = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+sha2 = { workspace = true }
 thiserror = { workspace = true }
 toml = { workspace = true }
 ulid = { workspace = true }
@@ -66,6 +69,7 @@ ulid = { workspace = true }
 [dev-dependencies]
 proptest = { workspace = true }
 insta = { workspace = true }
+tempfile = { workspace = true }
 ```
 
 - [ ] **Step 2: Create types.rs with core IDs and enums**
@@ -92,18 +96,27 @@ impl fmt::Display for SessionId {
     }
 }
 
-/// Unique project identifier. SHA-256 hash of the canonical project path.
+/// Unique project identifier. Stable hash of the canonical project path.
+///
+/// Uses SHA-256 (via the `sha2` crate) to produce a deterministic, version-stable
+/// identifier. This is critical because ProjectIds are persisted in PostgreSQL —
+/// `DefaultHasher` is NOT stable across Rust versions and must never be used here.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct ProjectId(pub String);
 
 impl ProjectId {
-    /// Create a ProjectId from a project path by hashing it.
+    /// Create a ProjectId from a project path by SHA-256 hashing it.
+    /// The result is a 16-character hex prefix of the full hash.
     pub fn from_path(path: &std::path::Path) -> Self {
-        use std::collections::hash_map::DefaultHasher;
-        use std::hash::{Hash, Hasher};
-        let mut hasher = DefaultHasher::new();
-        path.hash(&mut hasher);
-        Self(format!("{:016x}", hasher.finish()))
+        use sha2::{Digest, Sha256};
+        let mut hasher = Sha256::new();
+        hasher.update(path.to_string_lossy().as_bytes());
+        let hash = hasher.finalize();
+        // First 8 bytes (16 hex chars) — collision probability negligible for <1M projects
+        Self(format!(
+            "{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}",
+            hash[0], hash[1], hash[2], hash[3], hash[4], hash[5], hash[6], hash[7]
+        ))
     }
 }
 
@@ -506,6 +519,94 @@ mod tests {
         assert!((budget.usage_percent() - 35.0).abs() < 0.01);
     }
 }
+
+#[cfg(test)]
+mod proptests {
+    use super::*;
+    use proptest::prelude::*;
+
+    prop_compose! {
+        fn arb_cost()(cost in 0.001f64..100.0) -> f64 {
+            cost
+        }
+    }
+
+    prop_compose! {
+        fn arb_budget()(budget in 1.0f64..1000.0) -> f64 {
+            budget
+        }
+    }
+
+    proptest! {
+        #[test]
+        fn usage_percent_bounded(budget_usd in 1.0f64..1000.0, cost in 0.001f64..500.0) {
+            let mut budget = RateBudget::new(budget_usd, BudgetAllocation::default());
+            let entry = CostEntry {
+                timestamp: Utc::now(),
+                cost_usd: cost,
+                subsystem: Subsystem::Interactive,
+                model_tier: ModelTier::Sonnet,
+                session_id: None,
+            };
+            budget.record(entry);
+            let pct = budget.usage_percent();
+            prop_assert!(pct >= 0.0, "usage_percent must be >= 0, got {}", pct);
+            // Can exceed 100% if cost > budget — that's valid (overspend detection)
+        }
+
+        #[test]
+        fn can_afford_monotonically_decreasing(
+            budget_usd in 10.0f64..100.0,
+            costs in prop::collection::vec(0.1f64..5.0, 1..10),
+        ) {
+            let mut budget = RateBudget::new(budget_usd, BudgetAllocation::default());
+            let mut prev_remaining = budget.remaining();
+
+            for cost in costs {
+                let entry = CostEntry {
+                    timestamp: Utc::now(),
+                    cost_usd: cost,
+                    subsystem: Subsystem::Interactive,
+                    model_tier: ModelTier::Sonnet,
+                    session_id: None,
+                };
+                budget.record(entry);
+                let current_remaining = budget.remaining();
+                prop_assert!(
+                    current_remaining <= prev_remaining,
+                    "remaining budget must not increase: {} -> {}",
+                    prev_remaining,
+                    current_remaining,
+                );
+                prev_remaining = current_remaining;
+            }
+        }
+
+        #[test]
+        fn allocation_percentages_consistent(
+            interactive in 10.0f64..40.0,
+            scheduled in 5.0f64..20.0,
+            evolution in 5.0f64..20.0,
+        ) {
+            // Force sum to 100 by computing monitoring and reserve from remainder
+            let reserve = 5.0;
+            let monitoring = 100.0 - interactive - scheduled - evolution - reserve;
+            prop_assume!(monitoring > 0.0);
+
+            let alloc = BudgetAllocation {
+                interactive,
+                scheduled,
+                evolution,
+                monitoring,
+                emergency_reserve: reserve,
+            };
+            prop_assert!(alloc.validate().is_ok());
+            // Each subsystem's percentage_for matches its field
+            prop_assert!((alloc.percentage_for(Subsystem::Interactive) - interactive).abs() < f64::EPSILON);
+            prop_assert!((alloc.percentage_for(Subsystem::Scheduled) - scheduled).abs() < f64::EPSILON);
+        }
+    }
+}
 ```
 
 - [ ] **Step 2: Run tests to verify they pass**
@@ -774,15 +875,26 @@ timeout_seconds = 900
         let secrets = load_secrets(Path::new("/nonexistent/secrets.toml")).unwrap();
         assert!(secrets.database.url.contains("localhost:5432"));
     }
+
+    #[test]
+    fn default_config_snapshot() {
+        let config = load_config(Path::new("/nonexistent/config.toml")).unwrap();
+        // Snapshot the serialized TOML to catch unintended default changes
+        let serialized = toml::to_string_pretty(&config).unwrap();
+        insta::assert_snapshot!("default_config", serialized);
+    }
 }
 ```
 
-- [ ] **Step 2: Add `dirs` to workspace dependencies**
+**Note:** The insta snapshot test will create a `snapshots/` directory on first run with the expected output. Subsequent runs verify the defaults haven't changed unintentionally. Run `cargo insta review` to approve new snapshots.
+
+- [ ] **Step 2: Add `dirs` and `sha2` to workspace dependencies**
 
 In root `Cargo.toml`, add to `[workspace.dependencies]`:
 
 ```toml
 dirs = "6"
+sha2 = "0.10"
 ```
 
 In `crates/autonomic-core/Cargo.toml`, add to `[dependencies]`:

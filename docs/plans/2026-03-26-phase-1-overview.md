@@ -46,7 +46,7 @@ Phase 1C: User Interface (depends on 1A + 1B)
 
 ## Key Decisions for Phase 1
 
-1. **Host-first, containers later**: Phase 1 spawns Claude directly on the host via `tokio::process::Command`. The `ContainerRuntime` trait exists with a `HostRuntime` implementation. Podman/Docker support is added in Phase 1B as `PodmanRuntime`.
+1. **Host-first, containers later** (transitional): Phase 1 spawns Claude directly on the host via `tokio::process::Command`. The `ContainerRuntime` trait exists with a `HostRuntime` implementation. This is a pragmatic stepping stone — the PRD v0.5 centers on container architecture, and `PodmanRuntime` will be the primary implementation by Phase 2. The trait abstraction ensures zero refactoring when containers arrive.
 
 2. **PostgreSQL required from day 1**: All shared state (sessions, metrics, traces) goes to Postgres per XD-002/XD-010. The `infra/compose.yaml` must be running before the daemon starts.
 
